@@ -449,11 +449,24 @@ function update(dt) {
     ballBounds(b);
 
     // collision rules:
-    // - If the ball is "armed" (was thrown recently), it can tag someone (transfer IT)
-    // - If it's unarmed/resting, only IT can pick it up by running over it
+    // - IT can pick up a loose ball by running over it (even if it was recently thrown),
+    //   as long as it's slowed down enough to be realistically "grabbed".
+    // - If the ball is "armed" and moving, it can tag someone (transfer IT).
     for (const p of state.players) {
       const d = vecLen(p.x - b.x, p.y - b.y);
       if (d > PLAYER_RADIUS + BALL_RADIUS) continue;
+
+      // pickup (priority): only current IT can collect a loose ball
+      if (it && p.id === it.id && !b.heldBy) {
+        const sp = vecLen(b.vx, b.vy);
+        if (sp < 220) {
+          b.heldBy = it.id;
+          b.lastThrower = null;
+          b.armed = false;
+          b.vx = 0; b.vy = 0;
+          break;
+        }
+      }
 
       if (b.armed) {
         // prevent immediate self-tag; also allow only if not in cooldown
@@ -463,14 +476,6 @@ function update(dt) {
         p.lastHitAt = now;
         setIt(p.id);
         break;
-      } else {
-        // pickup: only current IT can collect an unarmed ball
-        if (it && p.id === it.id) {
-          b.heldBy = it.id;
-          b.lastThrower = null;
-          b.vx = 0; b.vy = 0;
-          break;
-        }
       }
     }
 
