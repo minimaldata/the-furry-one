@@ -981,13 +981,14 @@ function connectOnline() {
       state.wsReady = true;
       state.playerId = msg.playerId;
       localStorage.setItem('tfo_playerId', msg.playerId);
-      applyServerState(msg.state);
+      state.pendingServerState = msg.state;
       startInputLoop();
       return;
     }
 
     if (msg.type === 'state' && msg.state) {
-      applyServerState(msg.state);
+      // keep only the latest snapshot; apply once per frame in loop()
+      state.pendingServerState = msg.state;
       return;
     }
   });
@@ -1180,6 +1181,12 @@ function loop() {
   const now = performance.now();
   const dt = clamp((now - state.lastT) / 1000, 0, 0.05);
   state.lastT = now;
+
+  // Apply at most one server state per frame (prevents backlog/freezes).
+  if (state.mode === 'online' && state.wsReady && state.pendingServerState) {
+    applyServerState(state.pendingServerState);
+    state.pendingServerState = null;
+  }
 
   // inactivity kick (online only)
   if (state.mode === 'online' && state.wsReady) {
