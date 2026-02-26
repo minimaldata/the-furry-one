@@ -64,6 +64,7 @@ app.innerHTML = `
     </div>
     <div class="hud">
       <div class="pill" id="status">Loading…</div>
+      <div class="pill" id="meStats">You: —</div>
       <div class="pill" id="goal">Goal: avoid IT</div>
       <button class="btn" id="reset">Reset</button>
     </div>
@@ -81,9 +82,7 @@ app.innerHTML = `
     </div>
   </div>
 
-  <div class="help">
-    <div class="card"><div class="small" id="score"></div></div>
-  </div>
+  <div class="help"></div>
 `;
 
 const canvas = document.querySelector('#c');
@@ -894,16 +893,18 @@ function draw() {
   if (it) statusEl.textContent = `${mode} · ${it.name} is IT`;
   else statusEl.textContent = `${mode} · waiting for IT…`;
 
-  const scoreEl = document.querySelector('#score');
-  const sorted = [...state.players].sort((a,b) => b.score - a.score);
-  scoreEl.innerHTML = `<b>First to ${WIN_POINTS} wins</b><br><span style="color:rgba(255,255,255,.7)">You don’t want to be IT: gain points near IT · lose points while IT</span><br>` + sorted.map(p => {
-    const s = (p.furryMs/1000).toFixed(1);
-    const pts = (p.score || 0).toFixed(0);
-    const tag = p.it ? ' <span style="color:#f59e0b">(it)</span>' : '';
-    const you = (p.id === (state.playerId || 'me')) ? ' <span style="color:#22c55e">(you)</span>' : '';
-    const disc = p.disconnected ? ' <span style="color:rgba(255,255,255,.5)">(dc)</span>' : '';
-    return `${p.name}: ${pts} · ${s}s${you}${tag}${disc}`;
-  }).join('<br>');
+  const meStatsEl = document.querySelector('#meStats');
+  const sorted = [...state.players].sort((a,b) => (b.score || 0) - (a.score || 0));
+  const myId = (state.playerId || 'me');
+  const me = state.players.find(p => p.id === myId);
+  if (meStatsEl && me) {
+    const rank = sorted.findIndex(p => p.id === myId) + 1;
+    const pts = (me.score || 0).toFixed(0);
+    const total = sorted.length;
+    meStatsEl.textContent = `You: ${pts} pts · #${rank}/${total}`;
+  } else if (meStatsEl) {
+    meStatsEl.textContent = 'You: —';
+  }
 
   if (state.over && state.winnerId) {
     const wP = state.players.find(p => p.id === state.winnerId);
