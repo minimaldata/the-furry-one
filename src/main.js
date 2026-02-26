@@ -1,11 +1,8 @@
 import './style.css';
 
-// The Furry One — single-device prototype (player + bots)
-// Goal: spend the least time as "the furry one".
-// Mechanics:
-// - Move: WASD/Arrows
-// - If you're it: click+hold to charge throw at mouse position, release to throw
-// - Imperfect aim: random spread + a bit of movement-based noise
+// The Furry One — offline single-player + online multiplayer (single global room)
+// Offline (fallback): client sim
+// Online: authoritative server sim via WebSocket snapshots
 
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -26,8 +23,39 @@ function vecNorm(x, y) {
   return [x / L, y / L];
 }
 
-const app = document.querySelector('#app');
+// Shared constants (keep in sync with server/sim.js)
+const ARENA_W = 1200;
+const ARENA_H = 720;
 
+const PLAYER_RADIUS = 14;
+const BALL_RADIUS = 9;
+const MAX_THROW_SPEED = 820;
+const MIN_THROW_SPEED = 220;
+const CHARGE_MS = 900;
+const FRICTION = 0.90;
+const BALL_FRICTION = 0.992;
+const BOT_COUNT = 14;
+const HIT_COOLDOWN_MS = 450;
+const TOUCH_TAG_COOLDOWN_MS = 650;
+
+const WIN_POINTS = 100;
+const PROX_MAX_DIST = 260;
+const PROX_POINTS_PER_SEC = 16;
+const IT_BLEED_POINTS_PER_SEC = 6;
+
+const COLORS = {
+  arena: '#0a0d14',
+  grid: 'rgba(255,255,255,.04)',
+  text: 'rgba(255,255,255,.90)',
+  muted: 'rgba(255,255,255,.60)',
+  me: '#22c55e',
+  bot: 'rgba(255,255,255,.86)',
+  it: '#f59e0b',
+  ball: '#a78bfa',
+  aim: 'rgba(167,139,250,.35)',
+};
+
+const app = document.querySelector('#app');
 app.innerHTML = `
   <div class="top">
     <div class="brand">
@@ -61,14 +89,36 @@ app.innerHTML = `
 const canvas = document.querySelector('#c');
 const ctx = canvas.getContext('2d');
 
+const view = { scale: 1, offX: 0, offY: 0 };
+
+function updateView() {
+  const cw = canvas.clientWidth;
+  const ch = canvas.clientHeight;
+  const s = Math.min(cw / ARENA_W, ch / ARENA_H);
+  view.scale = s;
+  view.offX = (cw - ARENA_W * s) / 2;
+  view.offY = (ch - ARENA_H * s) / 2;
+}
+
 function resize() {
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.floor(canvas.clientWidth * dpr);
   canvas.height = Math.floor(canvas.clientHeight * dpr);
+  // map drawing commands to CSS pixels
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  updateView();
 }
 window.addEventListener('resize', resize);
 
+function screenToWorld(sx, sy) {
+  // sx,sy in CSS px relative to canvas
+  return {
+    x: clamp((sx - view.offX) / view.scale, 0, ARENA_W),
+    y: clamp((sy - view.offY) / view.scale, 0, ARENA_H),
+  };
+}
+
+// Input
 const keys = new Set();
 window.addEventListener('keydown', (e) => {
   if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','w','a','s','d','W','A','S','D',' '].includes(e.key)) e.preventDefault();
@@ -76,76 +126,36 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => keys.delete(e.key));
 
-// Fix "stuck keys" when the browser loses focus mid-keypress.
+const mouse = { sx: 0, sy: 0, x: ARENA_W/2, y: ARENA_H/2, down: false, downAt: 0 };
+canvas.addEventListener('mousemove', (e) => {
+  const r = canvas.getBoundingClientRect();
+  mouse.sx = e.clientX - r.left;
+  mouse.sy = e.clientY - r.top;
+  const w = screenToWorld(mouse.sx, mouse.sy);
+  mouse.x = w.x;
+  mouse.y = w.y;
+});
+canvas.addEventListener('mousedown', () => { mouse.down = true; mouse.downAt = performance.now(); });
+window.addEventListener('mouseup', () => { mouse.down = false; });
+
 function clearKeys() {
   keys.clear();
   state.wasMouseDown = false;
   state.wasSpaceDown = false;
 }
 window.addEventListener('blur', clearKeys);
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) clearKeys();
-});
-window.addEventListener('focus', () => {
-  // also clear on focus to be safe
-  clearKeys();
-});
+document.addEventListener('visibilitychange', () => { if (document.hidden) clearKeys(); });
+window.addEventListener('focus', clearKeys);
 
-const mouse = { x: 0, y: 0, down: false, downAt: 0 };
-canvas.addEventListener('mousemove', (e) => {
-  const r = canvas.getBoundingClientRect();
-  mouse.x = e.clientX - r.left;
-  mouse.y = e.clientY - r.top;
-});
-canvas.addEventListener('mousedown', () => { mouse.down = true; mouse.downAt = performance.now(); });
-window.addEventListener('mouseup', () => { mouse.down = false; });
-
-const W = () => canvas.clientWidth;
-const H = () => canvas.clientHeight;
-
-// Game constants
-const PLAYER_RADIUS = 14;
-const BALL_RADIUS = 9;
-const MAX_THROW_SPEED = 820; // px/s
-const MIN_THROW_SPEED = 220;
-const CHARGE_MS = 900;
-const FRICTION = 0.90;
-const BALL_FRICTION = 0.992;
-const BOT_COUNT = 14;
-const HIT_COOLDOWN_MS = 450;
-const TOUCH_TAG_COOLDOWN_MS = 650;
-
-// Scoring:
-// - First to 100 points wins.
-// - You do NOT want to be IT.
-//   When you're NOT IT: earn points for staying close to IT (risk-reward).
-//   When you ARE IT: you bleed points over time.
-// - "The furry one" is the CURRENT LEADER by points (visual only).
-const WIN_POINTS = 100;
-const PROX_MAX_DIST = 260; // px; beyond this, no points
-const PROX_POINTS_PER_SEC = 16; // max points/sec at distance ~0
-const IT_BLEED_POINTS_PER_SEC = 6;
-
-const COLORS = {
-  arena: '#0a0d14',
-  grid: 'rgba(255,255,255,.04)',
-  text: 'rgba(255,255,255,.90)',
-  muted: 'rgba(255,255,255,.60)',
-  me: '#22c55e',
-  bot: 'rgba(255,255,255,.86)',
-  it: '#f59e0b',
-  ball: '#a78bfa',
-  aim: 'rgba(167,139,250,.35)',
-};
-
-function makePlayer(id, name, isHuman=false) {
+// Offline simulation state (also reused as container for online snapshots)
+function makePlayer(id, name, isHuman = false) {
   const pad = 60;
   return {
     id,
     name,
     human: isHuman,
-    x: pad + rand01() * (W() - pad*2),
-    y: pad + rand01() * (H() - pad*2),
+    x: pad + rand01() * (ARENA_W - pad*2),
+    y: pad + rand01() * (ARENA_H - pad*2),
     vx: 0,
     vy: 0,
     it: false,
@@ -154,7 +164,6 @@ function makePlayer(id, name, isHuman=false) {
     lastHitAt: -1e9,
     lastThrowAt: -1e9,
 
-    // telegraphing
     aiming: false,
     aimCharge: 0,
     aimX: 0,
@@ -163,30 +172,54 @@ function makePlayer(id, name, isHuman=false) {
   };
 }
 
-function resetGame() {
-  state.time0 = performance.now();
-  state.lastT = performance.now();
-  state.players = [makePlayer('me', 'You', true)];
-  for (let i=0;i<BOT_COUNT;i++) state.players.push(makePlayer('b'+i, 'Bot ' + (i+1)));
+const state = {
+  nowMs: performance.now(),
+  lastT: performance.now(),
+  online: false,
+  wsReady: false,
+  playerId: null,
 
-  // simple obstacles (rectangles)
-  const w = W(), h = H();
+  players: [],
+  obstacles: [],
+  ball: null,
+  wasMouseDown: false,
+  wasSpaceDown: false,
+  spaceDownAt: 0,
+
+  over: false,
+  winnerId: null,
+};
+
+function currentIt() { return state.players.find(p => p.it); }
+
+function setIt(playerId) {
+  for (const p of state.players) p.it = (p.id === playerId);
+  state.ball.heldBy = playerId;
+  state.ball.vx = 0;
+  state.ball.vy = 0;
+}
+
+function resetGameOffline() {
+  state.nowMs = performance.now();
+  state.lastT = performance.now();
+
+  state.players = [makePlayer('me', 'You', true)];
+  for (let i = 0; i < BOT_COUNT; i++) state.players.push(makePlayer('b' + i, 'Bot ' + (i + 1)));
+
   state.obstacles = [
-    // center blocks
-    { x: w*0.50 - 70, y: h*0.50 - 18, w: 140, h: 36 },
-    { x: w*0.50 - 18, y: h*0.50 - 70, w: 36, h: 140 },
-    // side blocks
-    { x: w*0.18 - 44, y: h*0.30 - 28, w: 88, h: 56 },
-    { x: w*0.82 - 44, y: h*0.70 - 28, w: 88, h: 56 },
+    { x: ARENA_W*0.50 - 70, y: ARENA_H*0.50 - 18, w: 140, h: 36 },
+    { x: ARENA_W*0.50 - 18, y: ARENA_H*0.50 - 70, w: 36, h: 140 },
+    { x: ARENA_W*0.18 - 44, y: ARENA_H*0.30 - 28, w: 88, h: 56 },
+    { x: ARENA_W*0.82 - 44, y: ARENA_H*0.70 - 28, w: 88, h: 56 },
   ];
-  // choose random it
-  state.players[Math.floor(rand01()*state.players.length)].it = true;
+
+  state.players[Math.floor(rand01() * state.players.length)].it = true;
   state.over = false;
   state.winnerId = null;
 
   state.ball = {
-    x: W()/2,
-    y: H()/2,
+    x: ARENA_W / 2,
+    y: ARENA_H / 2,
     vx: 0,
     vy: 0,
     heldBy: state.players.find(p => p.it)?.id || null,
@@ -194,12 +227,11 @@ function resetGame() {
     armed: false,
     thrownAt: -1e9,
   };
-  state.throwCharge = 0;
+
   state.wasMouseDown = false;
   state.wasSpaceDown = false;
   state.spaceDownAt = 0;
 
-  // clear bot telegraph state
   for (const p of state.players) {
     p.aiming = false;
     p.aimCharge = 0;
@@ -209,55 +241,7 @@ function resetGame() {
   }
 }
 
-const state = {
-  time0: performance.now(),
-  lastT: performance.now(),
-  players: [],
-  obstacles: [],
-  ball: null,
-  throwCharge: 0,
-  wasMouseDown: false,
-  wasSpaceDown: false,
-  spaceDownAt: 0,
-  over: false,
-  winnerId: null,
-};
-
-function currentIt() { return state.players.find(p => p.it); }
-
-function setIt(playerId) {
-  for (const p of state.players) p.it = (p.id === playerId);
-  // give ball to new it
-  state.ball.heldBy = playerId;
-  state.ball.vx = 0;
-  state.ball.vy = 0;
-}
-
-function moveHuman(p, dt) {
-  let ax = 0, ay = 0;
-  const up = keys.has('ArrowUp') || keys.has('w') || keys.has('W');
-  const dn = keys.has('ArrowDown') || keys.has('s') || keys.has('S');
-  const lf = keys.has('ArrowLeft') || keys.has('a') || keys.has('A');
-  const rt = keys.has('ArrowRight') || keys.has('d') || keys.has('D');
-  if (up) ay -= 1;
-  if (dn) ay += 1;
-  if (lf) ax -= 1;
-  if (rt) ax += 1;
-  const [nx, ny] = vecNorm(ax, ay);
-
-  const speed = 1080;
-  p.vx = lerp(p.vx, nx * speed, 1 - Math.pow(0.001, dt));
-  p.vy = lerp(p.vy, ny * speed, 1 - Math.pow(0.001, dt));
-
-  p.x += p.vx * dt;
-  p.y += p.vy * dt;
-  p.vx *= Math.pow(FRICTION, dt*60);
-  p.vy *= Math.pow(FRICTION, dt*60);
-}
-
 function segmentIntersectsRect(x1, y1, x2, y2, r) {
-  // Liang–Barsky style parametric clipping against axis-aligned rect
-  // Returns true if segment intersects rect interior.
   const minX = r.x, maxX = r.x + r.w;
   const minY = r.y, maxY = r.y + r.h;
   let t0 = 0, t1 = 1;
@@ -289,24 +273,40 @@ function segmentIntersectsRect(x1, y1, x2, y2, r) {
 }
 
 function hasClearThrow(fromX, fromY, toX, toY) {
-  // true if segment does NOT cross any obstacle
   for (const ob of state.obstacles) {
     if (segmentIntersectsRect(fromX, fromY, toX, toY, ob)) return false;
   }
   return true;
 }
 
+function moveHuman(p, dt) {
+  let ax = 0, ay = 0;
+  const up = keys.has('ArrowUp') || keys.has('w') || keys.has('W');
+  const dn = keys.has('ArrowDown') || keys.has('s') || keys.has('S');
+  const lf = keys.has('ArrowLeft') || keys.has('a') || keys.has('A');
+  const rt = keys.has('ArrowRight') || keys.has('d') || keys.has('D');
+  if (up) ay -= 1;
+  if (dn) ay += 1;
+  if (lf) ax -= 1;
+  if (rt) ax += 1;
+  const [nx, ny] = vecNorm(ax, ay);
+
+  const speed = 1080;
+  p.vx = lerp(p.vx, nx * speed, 1 - Math.pow(0.001, dt));
+  p.vy = lerp(p.vy, ny * speed, 1 - Math.pow(0.001, dt));
+
+  p.x += p.vx * dt;
+  p.y += p.vy * dt;
+  p.vx *= Math.pow(FRICTION, dt*60);
+  p.vy *= Math.pow(FRICTION, dt*60);
+}
+
 function moveBot(p, dt) {
   const it = currentIt();
   if (!it) return;
 
-  // Behavior:
-  // - If bot is IT: retrieve ball if needed; otherwise hunt the best target (win-denial + hitability)
-  // - If bot is NOT IT: orbit near IT for points while dodging the ball
-
   const targets = state.players.filter(q => q.id !== p.id);
 
-  // nearest (for some movement defaults)
   let nearest = targets[0];
   let best = 1e9;
   for (const q of targets) {
@@ -314,19 +314,14 @@ function moveBot(p, dt) {
     if (d < best) { best = d; nearest = q; }
   }
 
-  // pick best throw target: prioritize players close to winning, but still hittable
-  const bestScore = Math.max(...state.players.map(x => x.score || 0));
   let throwTarget = nearest;
   let throwBest = -1e18;
   for (const q of targets) {
     const d = vecLen(q.x - p.x, q.y - p.y);
     const leader01 = clamp((q.score || 0) / WIN_POINTS, 0, 1);
     const closish01 = clamp(1 - d / 900, 0, 1);
-
-    // prefer leaders + closer + (line of sight)
     const los = hasClearThrow(p.x, p.y, q.x, q.y) ? 1 : 0;
     const s = (2.2 * leader01 + 0.9 * closish01 + 0.4 * rand01()) * (0.25 + 0.75 * los);
-
     if (s > throwBest) {
       throwBest = s;
       throwTarget = q;
@@ -334,49 +329,32 @@ function moveBot(p, dt) {
   }
 
   let tx = p.x, ty = p.y;
-
   const b = state.ball;
   if (p.it) {
-    // If you're IT and the ball isn't in your hand, your #1 job is to go pick it up.
-    if (b && !b.heldBy) {
-      tx = b.x;
-      ty = b.y;
-    } else {
-      // otherwise chase a target
-      tx = nearest.x;
-      ty = nearest.y;
-    }
+    if (b && !b.heldBy) { tx = b.x; ty = b.y; }
+    else { tx = nearest.x; ty = nearest.y; }
   } else {
-    // Not IT: bots should try to WIN.
-    // That means hovering near IT (to gain points) while dodging the ball-in-flight.
-
-    // Desired "sweet spot" distance (closer earns points, but too close is risky).
     const SWEET = 140;
     const FAR = 280;
-
-    // If you're behind in score, take more risk (play closer).
     const bestScoreNow = Math.max(...state.players.map(x => x.score || 0));
     const behind01 = clamp((bestScoreNow - (p.score || 0)) / WIN_POINTS, 0, 1);
-    const risk = 0.55 + 0.35 * behind01; // 0.55..0.90
-
+    const risk = 0.55 + 0.35 * behind01;
     const desiredDist = lerp(FAR, SWEET, risk);
 
-    // Build an "orbit near IT" target.
     const dxIT = p.x - it.x;
     const dyIT = p.y - it.y;
     const dIT = vecLen(dxIT, dyIT) || 1;
-    const [nxIT, nyIT] = [dxIT / dIT, dyIT / dIT];
+    const nxIT = dxIT / dIT;
+    const nyIT = dyIT / dIT;
     const oxIT = -nyIT;
     const oyIT = nxIT;
 
-    // If too far: move toward IT; if too close: move away; always add orbit.
     const radialSign = (dIT > desiredDist) ? -1 : 1;
-    const wob = Math.sin(performance.now()/520 + p.id.length) * 0.9;
+    const wob = Math.sin(state.nowMs/520 + p.id.length) * 0.9;
 
     let vxGoal = nxIT * radialSign * 1.0 + oxIT * 0.9 * wob;
     let vyGoal = nyIT * radialSign * 1.0 + oyIT * 0.9 * wob;
 
-    // Dodge ball-in-flight more aggressively when nearby.
     if (b && !b.heldBy) {
       const tLead = clamp(vecLen(b.vx, b.vy) / 900, 0.10, 0.30);
       const bx = b.x + b.vx * tLead;
@@ -384,7 +362,6 @@ function moveBot(p, dt) {
       const dBall = vecLen(p.x - bx, p.y - by);
       if (dBall < 460) {
         const [nbx, nby] = vecNorm(p.x - bx, p.y - by);
-        // push away from predicted ball path
         vxGoal += nbx * 1.8;
         vyGoal += nby * 1.8;
       }
@@ -407,20 +384,16 @@ function moveBot(p, dt) {
   p.vx *= Math.pow(FRICTION, dt*60);
   p.vy *= Math.pow(FRICTION, dt*60);
 
-  // bot throw logic (only if it + holding ball)
+  // bot throw logic
   if (p.it && state.ball.heldBy === p.id) {
-    const now = performance.now();
-
-    // Telegraph + then throw (so humans can dodge the aim, not just the ball).
+    const now = state.nowMs;
     const inRange = vecLen(throwTarget.x - p.x, throwTarget.y - p.y) < 900;
     const cooldownOk = (now - p.lastThrowAt) > 950;
 
     if (!p.throwPlan && inRange && cooldownOk) {
-      // plan a throw
       const dist01 = clamp(vecLen(throwTarget.x - p.x, throwTarget.y - p.y) / 900, 0, 1);
       const targetCharge = clamp(0.40 + 0.50 * dist01 + 0.10 * rand01(), 0.30, 0.95);
 
-      // lead slightly (use chosen target)
       const tgt = throwTarget;
       const leadT = 0.16 + 0.14 * rand01();
       const aimX = tgt.x + tgt.vx * leadT;
@@ -455,7 +428,6 @@ function moveBot(p, dt) {
       }
     }
   } else {
-    // clear telegraph if not holding
     p.throwPlan = null;
     p.aiming = false;
     p.aimCharge = 0;
@@ -463,7 +435,6 @@ function moveBot(p, dt) {
 }
 
 function resolveCircleRect(px, py, r, rect) {
-  // closest point on rect to circle center
   const cx = clamp(px, rect.x, rect.x + rect.w);
   const cy = clamp(py, rect.y, rect.y + rect.h);
   const dx = px - cx;
@@ -476,17 +447,14 @@ function resolveCircleRect(px, py, r, rect) {
 
 function keepInBounds(p) {
   const r = PLAYER_RADIUS;
-  const w = W(), h = H();
-  p.x = clamp(p.x, r, w - r);
-  p.y = clamp(p.y, r, h - r);
+  p.x = clamp(p.x, r, ARENA_W - r);
+  p.y = clamp(p.y, r, ARENA_H - r);
 
-  // obstacles
   for (const ob of state.obstacles) {
     const hit = resolveCircleRect(p.x, p.y, r, ob);
     if (!hit) continue;
     p.x += hit.nx * hit.push;
     p.y += hit.ny * hit.push;
-    // damp velocity when scraping
     const vn = p.vx * hit.nx + p.vy * hit.ny;
     if (vn < 0) {
       p.vx -= vn * hit.nx;
@@ -499,13 +467,11 @@ function keepInBounds(p) {
 
 function ballBounds(b) {
   const r = BALL_RADIUS;
-  const w = W(), h = H();
   if (b.x < r) { b.x = r; b.vx *= -0.72; }
-  if (b.x > w - r) { b.x = w - r; b.vx *= -0.72; }
+  if (b.x > ARENA_W - r) { b.x = ARENA_W - r; b.vx *= -0.72; }
   if (b.y < r) { b.y = r; b.vy *= -0.72; }
-  if (b.y > h - r) { b.y = h - r; b.vy *= -0.72; }
+  if (b.y > ARENA_H - r) { b.y = ARENA_H - r; b.vy *= -0.72; }
 
-  // bounce off obstacles
   for (const ob of state.obstacles) {
     const hit = resolveCircleRect(b.x, b.y, r, ob);
     if (!hit) continue;
@@ -525,9 +491,8 @@ function releaseThrow(thrower, aimX, aimY, charge01) {
   const b = state.ball;
   if (!b || b.heldBy !== thrower.id) return;
 
-  const now = performance.now();
+  const now = state.nowMs;
 
-  // imperfect aim: add angular noise that increases with movement + lower charge
   const dx = aimX - thrower.x;
   const dy = aimY - thrower.y;
   let [nx, ny] = vecNorm(dx, dy);
@@ -554,20 +519,10 @@ function releaseThrow(thrower, aimX, aimY, charge01) {
   b.vy = ny * speed;
 }
 
-function botThrow(bot, target, charge01) {
-  // lead slightly
-  const leadT = 0.18 + 0.12 * rand01();
-  const aimX = target.x + target.vx * leadT;
-  const aimY = target.y + target.vy * leadT;
-  releaseThrow(bot, aimX, aimY, charge01);
-}
-
-function update(dt) {
-  const now = performance.now();
-
+function updateOffline(dt) {
+  const now = state.nowMs;
   if (state.over) return;
 
-  // scoring + furry time
   const it = currentIt();
   for (const p of state.players) {
     if (p.it) {
@@ -586,15 +541,12 @@ function update(dt) {
     }
   }
 
-  // movement
   for (const p of state.players) {
     if (p.human) moveHuman(p, dt);
     else moveBot(p, dt);
     keepInBounds(p);
   }
 
-  // prevent player overlap (simple circle separation)
-  // Run a couple relaxation passes for stability at high speeds.
   for (let pass = 0; pass < 2; pass++) {
     for (let i = 0; i < state.players.length; i++) {
       for (let j = i + 1; j < state.players.length; j++) {
@@ -610,13 +562,11 @@ function update(dt) {
         const nx = dx / d;
         const ny = dy / d;
 
-        // push apart equally
         a.x -= nx * (overlap * 0.5);
         a.y -= ny * (overlap * 0.5);
         c.x += nx * (overlap * 0.5);
         c.y += ny * (overlap * 0.5);
 
-        // damp relative velocity along collision normal to reduce clumping
         const rvx = c.vx - a.vx;
         const rvy = c.vy - a.vy;
         const vn = rvx * nx + rvy * ny;
@@ -634,10 +584,9 @@ function update(dt) {
     }
   }
 
-  // ball follow/physics
   const b = state.ball;
+  if (!b) return;
 
-  // Invariants: only the current "it" can hold the ball.
   if (it && b.heldBy && b.heldBy !== it.id) {
     b.heldBy = it.id;
     b.lastThrower = null;
@@ -651,8 +600,6 @@ function update(dt) {
       b.vx = 0;
       b.vy = 0;
 
-      // Touch-tag: if IT is holding the ball, colliding with someone tags them.
-      // Use cooldown via lastHitAt to avoid immediate ping-pong loops.
       if (it && holder.id === it.id) {
         for (const other of state.players) {
           if (other.id === holder.id) continue;
@@ -669,12 +616,10 @@ function update(dt) {
         }
       }
 
-      // human throw (mouse OR spacebar)
       if (holder.human && holder.it) {
         const space = keys.has(' ');
         const md = mouse.down;
 
-        // update telegraph so others can see your aim/power
         holder.aiming = md || space;
         holder.aimX = mouse.x;
         holder.aimY = mouse.y;
@@ -685,16 +630,13 @@ function update(dt) {
         if (charging) {
           const start = md ? mouse.downAt : state.spaceDownAt;
           const t = clamp((now - start) / CHARGE_MS, 0, 1);
-          state.throwCharge = t;
           holder.aimCharge = t;
         }
 
-        // release on mouse up OR space up
         const releasedMouse = (!md && state.wasMouseDown);
         const releasedSpace = (!space && state.wasSpaceDown);
         if (releasedMouse || releasedSpace) {
-          releaseThrow(holder, mouse.x, mouse.y, state.throwCharge);
-          state.throwCharge = 0;
+          releaseThrow(holder, mouse.x, mouse.y, holder.aimCharge || 0);
           holder.aiming = false;
           holder.aimCharge = 0;
         }
@@ -710,15 +652,10 @@ function update(dt) {
     b.vy *= Math.pow(BALL_FRICTION, dt*60);
     ballBounds(b);
 
-    // collision rules:
-    // - IT can pick up a loose ball by running over it (even if it was recently thrown),
-    //   as long as it's slowed down enough to be realistically "grabbed".
-    // - If the ball is "armed" and moving, it can tag someone (transfer IT).
     for (const p of state.players) {
       const d = vecLen(p.x - b.x, p.y - b.y);
       if (d > PLAYER_RADIUS + BALL_RADIUS) continue;
 
-      // pickup (priority): only current IT can collect a loose ball
       if (it && p.id === it.id && !b.heldBy) {
         const sp = vecLen(b.vx, b.vy);
         if (sp < 220) {
@@ -731,26 +668,21 @@ function update(dt) {
       }
 
       if (b.armed) {
-        // prevent immediate self-tag; also allow only if not in cooldown
         if (p.id === b.lastThrower) continue;
         if ((now - p.lastHitAt) < HIT_COOLDOWN_MS) continue;
-
         p.lastHitAt = now;
         setIt(p.id);
         break;
       }
     }
 
-    // If the ball slows, it becomes "unarmed" and stays on the ground.
-    // The furry one must run over it to pick it up.
-    if (vecLen(b.vx, b.vy) < 55) {
-      b.armed = false;
-    }
+    if (vecLen(b.vx, b.vy) < 55) b.armed = false;
   }
 }
 
 function draw() {
-  const w = W(), h = H();
+  const cw = canvas.clientWidth;
+  const ch = canvas.clientHeight;
 
   // endgame overlay
   const overlay = document.querySelector('#overlay');
@@ -767,7 +699,7 @@ function draw() {
       endRows.innerHTML = sorted.map(p => {
         const pts = (p.score || 0).toFixed(0);
         const furry = (p.furryMs/1000).toFixed(1);
-        const you = p.human ? ' (you)' : '';
+        const you = p.id === (state.playerId || 'me') ? ' (you)' : (p.human ? ' (player)' : '');
         return `<div class="row"><div><b>${p.name}${you}</b></div><div>${pts} pts · ${furry}s it</div></div>`;
       }).join('');
     }
@@ -776,19 +708,24 @@ function draw() {
   }
 
   // background
-  ctx.clearRect(0, 0, w, h);
+  ctx.clearRect(0, 0, cw, ch);
   ctx.fillStyle = COLORS.arena;
-  ctx.fillRect(0,0,w,h);
+  ctx.fillRect(0, 0, cw, ch);
 
-  // subtle grid
+  // world transform
+  ctx.save();
+  ctx.translate(view.offX, view.offY);
+  ctx.scale(view.scale, view.scale);
+
+  // grid
   ctx.strokeStyle = COLORS.grid;
   ctx.lineWidth = 1;
   const step = 60;
-  for (let x=0; x<=w; x+=step) {
-    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke();
+  for (let x = 0; x <= ARENA_W; x += step) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, ARENA_H); ctx.stroke();
   }
-  for (let y=0; y<=h; y+=step) {
-    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke();
+  for (let y = 0; y <= ARENA_H; y += step) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(ARENA_W, y); ctx.stroke();
   }
 
   const it = currentIt();
@@ -804,7 +741,7 @@ function draw() {
     ctx.stroke();
   }
 
-  // aim indicator for anyone who is IT and currently aiming/charging
+  // aim indicator
   for (const p of state.players) {
     if (!p.it) continue;
     if (!p.aiming) continue;
@@ -816,7 +753,7 @@ function draw() {
     const charge = clamp(p.aimCharge || 0, 0, 1);
     const len = lerp(70, 220, charge);
 
-    ctx.strokeStyle = p.human ? 'rgba(34,197,94,.30)' : COLORS.aim;
+    ctx.strokeStyle = (p.id === (state.playerId || 'me')) ? 'rgba(34,197,94,.30)' : COLORS.aim;
     ctx.lineWidth = 10;
     ctx.lineCap = 'round';
     ctx.beginPath();
@@ -824,7 +761,6 @@ function draw() {
     ctx.lineTo(p.x + nx * len, p.y + ny * len);
     ctx.stroke();
 
-    // small target ring (subtle)
     ctx.lineWidth = 2;
     ctx.strokeStyle = 'rgba(255,255,255,.16)';
     ctx.beginPath();
@@ -832,21 +768,14 @@ function draw() {
     ctx.stroke();
   }
 
-  // leader fur (whoever is currently in 1st place)
+  // leader fur
   let leader = state.players[0];
-  for (const p of state.players) {
-    if ((p.score || 0) > (leader.score || 0)) leader = p;
-  }
+  for (const p of state.players) if ((p.score || 0) > (leader.score || 0)) leader = p;
 
-  // players
   for (const p of state.players) {
-    // fur for leader (longer = closer to winning)
-    if (p.id === leader.id) {
-      const t = performance.now() / 1000;
+    if (leader && p.id === leader.id) {
+      const t = state.nowMs / 1000;
       const win01 = clamp((p.score || 0) / WIN_POINTS, 0, 1);
-
-      // Make it feel like "fur": many thin, slightly curved, irregular strands.
-      // Avoid perfect radial symmetry (which reads as a sun).
       const strands = 46;
       const baseR = PLAYER_RADIUS + 3;
       const maxLen = 8 + 28 * (win01 ** 1.25);
@@ -856,7 +785,6 @@ function draw() {
       ctx.strokeStyle = 'rgba(245,158,11,.72)';
 
       for (let i = 0; i < strands; i++) {
-        // pseudo-random but stable-ish by player id length + i
         const seed = (p.id.length * 97 + i * 31);
         const jitterA = Math.sin(seed * 12.9898) * 43758.5453;
         const r01 = jitterA - Math.floor(jitterA);
@@ -865,7 +793,6 @@ function draw() {
         const wob = 0.55 + 0.45 * Math.sin(t * (2.2 + 0.6 * r01) + i * 0.37);
         const len = maxLen * (0.35 + 0.65 * wob) * (0.55 + 0.45 * r01);
 
-        // curve sideways a bit so it feels hairy, not spiky
         const bend = (r01 - 0.5) * 0.9;
         const nx = Math.cos(a);
         const ny = Math.sin(a);
@@ -885,11 +812,10 @@ function draw() {
         ctx.stroke();
       }
 
-      // subtle inner fuzz layer
       ctx.strokeStyle = 'rgba(245,158,11,.35)';
       ctx.lineWidth = 1;
       for (let i = 0; i < 18; i++) {
-        const a = (i / 18) * TAU + Math.sin(t*2 + i) * 0.1;
+        const a = (i / 18) * TAU + Math.sin(t * 2 + i) * 0.1;
         const nx = Math.cos(a);
         const ny = Math.sin(a);
         const len = 6 + 10 * win01;
@@ -902,11 +828,12 @@ function draw() {
 
     ctx.beginPath();
     ctx.arc(p.x, p.y, PLAYER_RADIUS, 0, TAU);
-    ctx.fillStyle = p.human ? COLORS.me : COLORS.bot;
-    ctx.globalAlpha = 1;
+    const isMe = p.id === (state.playerId || 'me');
+    ctx.fillStyle = isMe ? COLORS.me : (p.human ? 'rgba(255,255,255,.86)' : COLORS.bot);
+    ctx.globalAlpha = p.disconnected ? 0.35 : 1;
     ctx.fill();
+    ctx.globalAlpha = 1;
 
-    // ring if it
     if (p.it) {
       ctx.strokeStyle = COLORS.it;
       ctx.lineWidth = 4;
@@ -915,13 +842,11 @@ function draw() {
       ctx.stroke();
     }
 
-    // name label
     ctx.fillStyle = 'rgba(255,255,255,.82)';
     ctx.font = '12px ui-sans-serif, system-ui';
     ctx.textAlign = 'center';
     ctx.fillText(p.name, p.x, p.y - PLAYER_RADIUS - 12);
 
-    // extra clarity
     if (p.it) {
       ctx.fillStyle = 'rgba(245,158,11,.95)';
       ctx.font = '11px ui-sans-serif, system-ui';
@@ -932,7 +857,6 @@ function draw() {
   // ball
   const b = state.ball;
   if (b) {
-    // If held, draw a small tether so it's obvious who has it.
     if (b.heldBy) {
       const holder = state.players.find(p => p.id === b.heldBy);
       if (holder) {
@@ -955,9 +879,13 @@ function draw() {
     ctx.stroke();
   }
 
-  // top status + score
+  ctx.restore();
+
+  // HUD
   const statusEl = document.querySelector('#status');
-  if (it) statusEl.textContent = `${it.name} is the furry one`;
+  const mode = state.online ? (state.wsReady ? 'Online' : 'Connecting…') : 'Offline';
+  if (it) statusEl.textContent = `${mode} · ${it.name} is IT`;
+  else statusEl.textContent = `${mode} · waiting for IT…`;
 
   const scoreEl = document.querySelector('#score');
   const sorted = [...state.players].sort((a,b) => b.score - a.score);
@@ -965,35 +893,184 @@ function draw() {
     const s = (p.furryMs/1000).toFixed(1);
     const pts = (p.score || 0).toFixed(0);
     const tag = p.it ? ' <span style="color:#f59e0b">(it)</span>' : '';
-    const you = p.human ? ' <span style="color:#22c55e">(you)</span>' : '';
-    return `${p.name}: ${pts} · ${s}s${you}${tag}`;
+    const you = (p.id === (state.playerId || 'me')) ? ' <span style="color:#22c55e">(you)</span>' : '';
+    const disc = p.disconnected ? ' <span style="color:rgba(255,255,255,.5)">(dc)</span>' : '';
+    return `${p.name}: ${pts} · ${s}s${you}${tag}${disc}`;
   }).join('<br>');
 
   if (state.over && state.winnerId) {
-    const w = state.players.find(p => p.id === state.winnerId);
-    const statusEl = document.querySelector('#status');
-    statusEl.textContent = `${w?.name || 'Someone'} wins — press Reset (or Enter)`;
+    const wP = state.players.find(p => p.id === state.winnerId);
+    statusEl.textContent = `${mode} · ${wP?.name || 'Someone'} wins — press Reset (or Enter)`;
   }
 }
 
+// Online networking
+let ws = null;
+let inputSeq = 0;
+let inputTimer = null;
+
+function getWsUrl() {
+  const env = import.meta.env?.VITE_WS_URL;
+  if (env && typeof env === 'string') return env;
+  // default dev
+  return 'ws://localhost:8080';
+}
+
+function getPlayerName() {
+  const k = 'tfo_name';
+  let name = localStorage.getItem(k);
+  if (!name) {
+    name = (prompt('Name for online play?', 'Player') || 'Player').trim();
+    if (!name) name = 'Player';
+    localStorage.setItem(k, name);
+  }
+  return name.slice(0, 24);
+}
+
+function connectOnline() {
+  const url = getWsUrl();
+  state.online = true;
+  state.wsReady = false;
+
+  const storedId = localStorage.getItem('tfo_playerId');
+  const name = getPlayerName();
+
+  ws = new WebSocket(url);
+
+  ws.addEventListener('open', () => {
+    ws.send(JSON.stringify({ type: 'join', playerId: storedId, name }));
+  });
+
+  ws.addEventListener('message', (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+
+    if (msg.type === 'welcome') {
+      state.wsReady = true;
+      state.playerId = msg.playerId;
+      localStorage.setItem('tfo_playerId', msg.playerId);
+      applyServerState(msg.state);
+      startInputLoop();
+      return;
+    }
+
+    if (msg.type === 'state' && msg.state) {
+      applyServerState(msg.state);
+      return;
+    }
+  });
+
+  const goOffline = () => {
+    state.online = false;
+    state.wsReady = false;
+    stopInputLoop();
+    ws = null;
+  };
+
+  ws.addEventListener('close', goOffline);
+  ws.addEventListener('error', goOffline);
+}
+
+function applyServerState(s) {
+  // Overwrite the state container with server snapshot.
+  // Keep local-only fields (online/wsReady/playerId etc).
+  state.nowMs = s.nowMs ?? state.nowMs;
+  state.players = s.players ?? state.players;
+  state.obstacles = s.obstacles ?? state.obstacles;
+  state.ball = s.ball ?? state.ball;
+  state.over = !!s.over;
+  state.winnerId = s.winnerId ?? null;
+}
+
+function buildInput() {
+  const up = keys.has('ArrowUp') || keys.has('w') || keys.has('W');
+  const dn = keys.has('ArrowDown') || keys.has('s') || keys.has('S');
+  const lf = keys.has('ArrowLeft') || keys.has('a') || keys.has('A');
+  const rt = keys.has('ArrowRight') || keys.has('d') || keys.has('D');
+  const spaceDown = keys.has(' ');
+  return {
+    type: 'input',
+    seq: ++inputSeq,
+    clientTime: performance.now(),
+    up, dn, lf, rt,
+    mouseX: mouse.x,
+    mouseY: mouse.y,
+    mouseDown: mouse.down,
+    spaceDown,
+  };
+}
+
+function startInputLoop() {
+  stopInputLoop();
+  inputTimer = setInterval(() => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!state.wsReady) return;
+    ws.send(JSON.stringify(buildInput()));
+  }, 33);
+}
+
+function stopInputLoop() {
+  if (inputTimer) clearInterval(inputTimer);
+  inputTimer = null;
+}
+
+// Main loop
 function loop() {
   const now = performance.now();
   const dt = clamp((now - state.lastT) / 1000, 0, 0.05);
   state.lastT = now;
 
-  update(dt);
-  draw();
+  if (!state.online) {
+    state.nowMs = now;
+    updateOffline(dt);
+  }
 
+  draw();
   requestAnimationFrame(loop);
 }
 
-document.querySelector('#reset').addEventListener('click', resetGame);
-document.querySelector('#playAgain')?.addEventListener('click', resetGame);
-
-window.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && state.over) resetGame();
+// Buttons
+const resetBtn = document.querySelector('#reset');
+resetBtn.addEventListener('click', () => {
+  if (state.online && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'reset' }));
+  } else {
+    resetGameOffline();
+  }
 });
 
+document.querySelector('#playAgain')?.addEventListener('click', () => {
+  if (state.online && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'reset' }));
+  } else {
+    resetGameOffline();
+  }
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && state.over) {
+    if (state.online && ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'reset' }));
+    else resetGameOffline();
+  }
+});
+
+// Boot
 resize();
-resetGame();
+resetGameOffline();
+
+// Try online, fallback to offline if it doesn't connect quickly.
+const onlineTimeout = setTimeout(() => {
+  if (!state.wsReady) {
+    // stay offline
+    state.online = false;
+  }
+}, 1500);
+
+try {
+  connectOnline();
+} catch {
+  state.online = false;
+}
+
+setTimeout(() => clearTimeout(onlineTimeout), 1600);
 loop();
