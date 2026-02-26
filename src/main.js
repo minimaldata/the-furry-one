@@ -690,6 +690,13 @@ function draw() {
   const cw = canvas.clientWidth;
   const ch = canvas.clientHeight;
 
+  // choose state for rendering (interpolated when online)
+  const R = getRenderSnapshot();
+  const players = R.players || [];
+  const obstacles = R.obstacles || [];
+  const ball = R.ball || null;
+  const it = players.find(p => p.it);
+
   // endgame overlay
   const overlay = document.querySelector('#overlay');
   if (state.over && state.winnerId) {
@@ -701,8 +708,8 @@ function draw() {
     if (endTitle) endTitle.textContent = `${wP?.name || 'Someone'} wins!`;
     if (endSub) endSub.textContent = `First to ${WIN_POINTS} points. Press Enter or Play again.`;
     if (endRows) {
-      const sorted = [...state.players].sort((a,b) => b.score - a.score);
-      endRows.innerHTML = sorted.map(p => {
+      const sorted = [...state.players].sort((a,b) => (b.score||0) - (a.score||0));
+    endRows.innerHTML = sorted.map(p => {
         const pts = (p.score || 0).toFixed(0);
         const furry = (p.furryMs/1000).toFixed(1);
         const you = p.id === (state.playerId || 'me') ? ' (you)' : (p.human ? ' (player)' : '');
@@ -734,10 +741,8 @@ function draw() {
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(ARENA_W, y); ctx.stroke();
   }
 
-  const it = currentIt();
-
   // obstacles
-  for (const ob of state.obstacles) {
+  for (const ob of obstacles) {
     ctx.fillStyle = 'rgba(255,255,255,.05)';
     ctx.strokeStyle = 'rgba(255,255,255,.10)';
     ctx.lineWidth = 2;
@@ -748,10 +753,10 @@ function draw() {
   }
 
   // aim indicator
-  for (const p of state.players) {
+  for (const p of players) {
     if (!p.it) continue;
     if (!p.aiming) continue;
-    if (!state.ball?.heldBy || state.ball.heldBy !== p.id) continue;
+    if (!ball?.heldBy || ball.heldBy !== p.id) continue;
 
     const dx = (p.aimX ?? p.x) - p.x;
     const dy = (p.aimY ?? p.y) - p.y;
@@ -861,10 +866,10 @@ function draw() {
   }
 
   // ball
-  const b = state.ball;
+  const b = ball;
   if (b) {
     if (b.heldBy) {
-      const holder = state.players.find(p => p.id === b.heldBy);
+      const holder = players.find(p => p.id === b.heldBy);
       if (holder) {
         ctx.strokeStyle = 'rgba(167,139,250,.35)';
         ctx.lineWidth = 3;
@@ -916,6 +921,11 @@ function draw() {
 let ws = null;
 let inputSeq = 0;
 let inputTimer = null;
+
+// Net smoothing
+const RENDER_DELAY_MS = 120; // interpolate slightly "in the past" for smoothness
+const MAX_SNAPSHOT_AGE_MS = 2000;
+state.snapshots = []; // { recvMs, nowMs, players, obstacles, ball, over, winnerId }
 
 function getWsUrl() {
   const env = import.meta.env?.VITE_WS_URL;
@@ -980,14 +990,100 @@ function connectOnline() {
 }
 
 function applyServerState(s) {
-  // Overwrite the state container with server snapshot.
-  // Keep local-only fields (online/wsReady/playerId etc).
-  state.nowMs = s.nowMs ?? state.nowMs;
-  state.players = s.players ?? state.players;
-  state.obstacles = s.obstacles ?? state.obstacles;
-  state.ball = s.ball ?? state.ball;
-  state.over = !!s.over;
-  state.winnerId = s.winnerId ?? null;
+  const recvMs = performance.now();
+  const snap = {
+    recvMs,
+    nowMs: s.nowMs ?? 0,
+    players: s.players ?? [],
+    obstacles: s.obstacles ?? [],
+    ball: s.ball ?? null,
+    over: !!s.over,
+    winnerId: s.winnerId ?? null,
+  };
+
+  state.snapshots.push(snap);
+
+  // keep only recent snapshots
+  const cutoff = recvMs - MAX_SNAPSHOT_AGE_MS;
+  state.snapshots = state.snapshots.filter(x => x.recvMs >= cutoff);
+
+  // keep a non-interpolated "latest" copy for non-positional fields
+  state.nowMs = snap.nowMs;
+  state.obstacles = snap.obstacles;
+  state.over = snap.over;
+  state.winnerId = snap.winnerId;
+}
+
+function lerpObj(a, b, t) {
+  if (!a) return b;
+  if (!b) return a;
+  const out = { ...b };
+  for (const k of ['x','y','vx','vy','aimX','aimY','aimCharge']) {
+    if (typeof a[k] === 'number' && typeof b[k] === 'number') out[k] = lerp(a[k], b[k], t);
+  }
+  return out;
+}
+
+function getRenderSnapshot() {
+  if (!state.online || !state.snapshots?.length) {
+    return { players: state.players, obstacles: state.obstacles, ball: state.ball };
+  }
+
+  const snaps = state.snapshots;
+  const latest = snaps[snaps.length - 1];
+  const targetNowMs = (latest.nowMs || 0) - RENDER_DELAY_MS;
+
+  // Find two snapshots around targetNowMs
+  let a = null;
+  let b = latest;
+  for (let i = snaps.length - 1; i >= 0; i--) {
+    if ((snaps[i].nowMs || 0) <= targetNowMs) {
+      a = snaps[i];
+      b = snaps[Math.min(i + 1, snaps.length - 1)];
+      break;
+    }
+  }
+  if (!a) {
+    // If we're too early, just use the oldest
+    a = snaps[0];
+    b = snaps[0];
+  }
+
+  const denom = ((b.nowMs || 0) - (a.nowMs || 0)) || 1;
+  const t = clamp((targetNowMs - (a.nowMs || 0)) / denom, 0, 1);
+
+  // players by id
+  const mapA = new Map((a.players || []).map(p => [p.id, p]));
+  const mapB = new Map((b.players || []).map(p => [p.id, p]));
+  const ids = new Set([...mapA.keys(), ...mapB.keys()]);
+  const players = [];
+  for (const id of ids) {
+    const pa = mapA.get(id);
+    const pb = mapB.get(id);
+    const p = lerpObj(pa, pb, t);
+    // keep discrete fields from newer snapshot
+    const src = pb || pa || {};
+    p.id = src.id;
+    p.name = src.name;
+    p.human = src.human;
+    p.it = src.it;
+    p.score = src.score;
+    p.furryMs = src.furryMs;
+    p.aiming = src.aiming;
+    p.disconnected = src.disconnected;
+    players.push(p);
+  }
+
+  // ball
+  const ball = lerpObj(a.ball, b.ball, t);
+  if (ball) {
+    const src = b.ball || a.ball || {};
+    ball.heldBy = src.heldBy;
+    ball.armed = src.armed;
+    ball.lastThrower = src.lastThrower;
+  }
+
+  return { players, obstacles: latest.obstacles || b.obstacles || a.obstacles || [], ball };
 }
 
 function buildInput() {
@@ -1014,7 +1110,7 @@ function startInputLoop() {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     if (!state.wsReady) return;
     ws.send(JSON.stringify(buildInput()));
-  }, 33);
+  }, 20); // higher input rate helps perceived latency
 }
 
 function stopInputLoop() {
