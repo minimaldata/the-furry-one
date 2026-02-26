@@ -36,7 +36,7 @@ app.innerHTML = `
     </div>
     <div class="hud">
       <div class="pill" id="status">Loading…</div>
-      <div class="pill" id="goal">Goal: be IT</div>
+      <div class="pill" id="goal">Goal: avoid IT</div>
       <button class="btn" id="reset">Reset</button>
     </div>
   </div>
@@ -117,14 +117,14 @@ const TOUCH_TAG_COOLDOWN_MS = 650;
 
 // Scoring:
 // - First to 100 points wins.
-// - You WANT to be the furry one.
-//   When you're IT: you earn points (more when close to other players).
-//   When you're NOT IT: you slowly bleed points.
+// - You do NOT want to be IT.
+//   When you're NOT IT: earn points for staying close to IT (risk-reward).
+//   When you ARE IT: you bleed points over time.
+// - "The furry one" is the CURRENT LEADER by points (visual only).
 const WIN_POINTS = 100;
-const PROX_MAX_DIST = 260; // px
-const IT_GAIN_POINTS_PER_SEC = 10;
-const IT_BONUS_POINTS_PER_SEC = 18; // extra at distance ~0
-const NON_IT_BLEED_POINTS_PER_SEC = 2;
+const PROX_MAX_DIST = 260; // px; beyond this, no points
+const PROX_POINTS_PER_SEC = 16; // max points/sec at distance ~0
+const IT_BLEED_POINTS_PER_SEC = 6;
 
 const COLORS = {
   arena: '#0a0d14',
@@ -347,44 +347,46 @@ function moveBot(p, dt) {
       ty = nearest.y;
     }
   } else {
-    // Not IT: you WANT to become IT to score. So you should seek a tag,
-    // but still dodge the ball-in-flight.
+    // Not IT: bots should try to WIN.
+    // That means hovering near IT (to gain points) while dodging the ball-in-flight.
 
-    // If you're behind in score, take more risk (get closer for a touch-tag).
+    // Desired "sweet spot" distance (closer earns points, but too close is risky).
+    const SWEET = 140;
+    const FAR = 280;
+
+    // If you're behind in score, take more risk (play closer).
     const bestScoreNow = Math.max(...state.players.map(x => x.score || 0));
     const behind01 = clamp((bestScoreNow - (p.score || 0)) / WIN_POINTS, 0, 1);
-    const risk = 0.55 + 0.40 * behind01; // 0.55..0.95
+    const risk = 0.55 + 0.35 * behind01; // 0.55..0.90
 
-    const WANT_TOUCH = lerp(110, 44, risk); // desired distance from IT
+    const desiredDist = lerp(FAR, SWEET, risk);
 
-    const dxIT = it.x - p.x;
-    const dyIT = it.y - p.y;
+    // Build an "orbit near IT" target.
+    const dxIT = p.x - it.x;
+    const dyIT = p.y - it.y;
     const dIT = vecLen(dxIT, dyIT) || 1;
     const [nxIT, nyIT] = [dxIT / dIT, dyIT / dIT];
     const oxIT = -nyIT;
     const oyIT = nxIT;
 
-    // move toward IT; add lateral wobble so they don't line up in a train
-    const wob = Math.sin(performance.now()/460 + p.id.length) * 0.9;
-    let vxGoal = nxIT * 1.25 + oxIT * 0.65 * wob;
-    let vyGoal = nyIT * 1.25 + oyIT * 0.65 * wob;
+    // If too far: move toward IT; if too close: move away; always add orbit.
+    const radialSign = (dIT > desiredDist) ? -1 : 1;
+    const wob = Math.sin(performance.now()/520 + p.id.length) * 0.9;
 
-    // if already very close, orbit a bit to avoid clumping
-    if (dIT < WANT_TOUCH) {
-      vxGoal = oxIT * 1.15 * wob;
-      vyGoal = oyIT * 1.15 * wob;
-    }
+    let vxGoal = nxIT * radialSign * 1.0 + oxIT * 0.9 * wob;
+    let vyGoal = nyIT * radialSign * 1.0 + oyIT * 0.9 * wob;
 
-    // Dodge ball-in-flight (primary threat)
+    // Dodge ball-in-flight more aggressively when nearby.
     if (b && !b.heldBy) {
       const tLead = clamp(vecLen(b.vx, b.vy) / 900, 0.10, 0.30);
       const bx = b.x + b.vx * tLead;
       const by = b.y + b.vy * tLead;
       const dBall = vecLen(p.x - bx, p.y - by);
-      if (dBall < 520) {
+      if (dBall < 460) {
         const [nbx, nby] = vecNorm(p.x - bx, p.y - by);
-        vxGoal += nbx * 2.1;
-        vyGoal += nby * 2.1;
+        // push away from predicted ball path
+        vxGoal += nbx * 1.8;
+        vyGoal += nby * 1.8;
       }
     }
 
@@ -570,20 +572,12 @@ function update(dt) {
   for (const p of state.players) {
     if (p.it) {
       p.furryMs += dt * 1000;
-
-      // earn points for being IT (bonus when close to others)
-      let nearestD = 1e9;
-      for (const q of state.players) {
-        if (q.id === p.id) continue;
-        const d = vecLen(q.x - p.x, q.y - p.y);
-        if (d < nearestD) nearestD = d;
-      }
-      const closeness01 = clamp(1 - (nearestD / PROX_MAX_DIST), 0, 1);
-      const bonus = IT_BONUS_POINTS_PER_SEC * (closeness01 ** 1.3);
-      p.score += (IT_GAIN_POINTS_PER_SEC + bonus) * dt;
-    } else {
-      // not IT: bleed slowly so the objective is to SEEK being IT
-      p.score = Math.max(0, p.score - NON_IT_BLEED_POINTS_PER_SEC * dt);
+      p.score = Math.max(0, p.score - IT_BLEED_POINTS_PER_SEC * dt);
+    } else if (it) {
+      const d = vecLen(p.x - it.x, p.y - it.y);
+      const closeness01 = clamp(1 - (d / PROX_MAX_DIST), 0, 1);
+      const pts = PROX_POINTS_PER_SEC * (closeness01 ** 1.6) * dt;
+      p.score += pts;
     }
 
     if (p.score >= WIN_POINTS && !state.over) {
@@ -928,7 +922,7 @@ function draw() {
 
   const scoreEl = document.querySelector('#score');
   const sorted = [...state.players].sort((a,b) => b.score - a.score);
-  scoreEl.innerHTML = `<b>First to ${WIN_POINTS} wins</b><br><span style="color:rgba(255,255,255,.7)">You want to be IT: points tick up while IT (more when close) · others bleed slowly</span><br>` + sorted.map(p => {
+  scoreEl.innerHTML = `<b>First to ${WIN_POINTS} wins</b><br><span style="color:rgba(255,255,255,.7)">You don’t want to be IT: gain points near IT · lose points while IT</span><br>` + sorted.map(p => {
     const s = (p.furryMs/1000).toFixed(1);
     const pts = (p.score || 0).toFixed(0);
     const tag = p.it ? ' <span style="color:#f59e0b">(it)</span>' : '';
