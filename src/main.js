@@ -64,6 +64,21 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => keys.delete(e.key));
 
+// Fix "stuck keys" when the browser loses focus mid-keypress.
+function clearKeys() {
+  keys.clear();
+  state.wasMouseDown = false;
+  state.wasSpaceDown = false;
+}
+window.addEventListener('blur', clearKeys);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) clearKeys();
+});
+window.addEventListener('focus', () => {
+  // also clear on focus to be safe
+  clearKeys();
+});
+
 const mouse = { x: 0, y: 0, down: false, downAt: 0 };
 canvas.addEventListener('mousemove', (e) => {
   const r = canvas.getBoundingClientRect();
