@@ -32,7 +32,7 @@ app.innerHTML = `
   <div class="top">
     <div class="brand">
       <div class="title">The Furry One</div>
-      <div class="subtitle">Dodgeball tag — avoid being it.</div>
+      <div class="subtitle">Move: WASD/Arrows · Aim: mouse · Throw (when IT): hold mouse or Space, release</div>
     </div>
     <div class="hud">
       <div class="pill" id="status">Loading…</div>
@@ -53,7 +53,6 @@ app.innerHTML = `
   </div>
 
   <div class="help">
-    <div class="card"><div class="small"><b>Move</b>: WASD / Arrows<br><b>Throw</b> (only when it): mouse aim + hold/release</div></div>
     <div class="card"><div class="small" id="score"></div></div>
   </div>
 `;
