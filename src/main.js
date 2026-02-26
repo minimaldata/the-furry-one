@@ -146,6 +146,8 @@ function resetGame() {
     vy: 0,
     heldBy: state.players.find(p => p.it)?.id || null,
     lastThrower: null,
+    armed: false,
+    thrownAt: -1e9,
   };
   state.throwCharge = 0;
   state.wasMouseDown = false;
@@ -340,6 +342,8 @@ function releaseThrow(thrower, aimX, aimY, charge01) {
   const b = state.ball;
   if (!b || b.heldBy !== thrower.id) return;
 
+  const now = performance.now();
+
   // imperfect aim: add angular noise that increases with movement + lower charge
   const dx = aimX - thrower.x;
   const dy = aimY - thrower.y;
@@ -359,6 +363,8 @@ function releaseThrow(thrower, aimX, aimY, charge01) {
 
   b.heldBy = null;
   b.lastThrower = thrower.id;
+  b.armed = true;
+  b.thrownAt = now;
   b.x = thrower.x + nx * (PLAYER_RADIUS + BALL_RADIUS + 2);
   b.y = thrower.y + ny * (PLAYER_RADIUS + BALL_RADIUS + 2);
   b.vx = nx * speed;
@@ -434,26 +440,36 @@ function update(dt) {
     b.vy *= Math.pow(BALL_FRICTION, dt*60);
     ballBounds(b);
 
-    // collision: ball hits a player => they become it (except thrower), with cooldown
+    // collision rules:
+    // - If the ball is "armed" (was thrown recently), it can tag someone (transfer IT)
+    // - If it's unarmed/resting, only IT can pick it up by running over it
     for (const p of state.players) {
       const d = vecLen(p.x - b.x, p.y - b.y);
-      if (d <= PLAYER_RADIUS + BALL_RADIUS) {
+      if (d > PLAYER_RADIUS + BALL_RADIUS) continue;
+
+      if (b.armed) {
         // prevent immediate self-tag; also allow only if not in cooldown
         if (p.id === b.lastThrower) continue;
         if ((now - p.lastHitAt) < HIT_COOLDOWN_MS) continue;
 
         p.lastHitAt = now;
-        // transfer "it" to hit player
         setIt(p.id);
         break;
+      } else {
+        // pickup: only current IT can collect an unarmed ball
+        if (it && p.id === it.id) {
+          b.heldBy = it.id;
+          b.lastThrower = null;
+          b.vx = 0; b.vy = 0;
+          break;
+        }
       }
     }
 
-    // if ball slows too much, return to it (keeps game flowing)
-    if (it && vecLen(b.vx, b.vy) < 40) {
-      b.heldBy = it.id;
-      b.lastThrower = null;
-      b.vx = 0; b.vy = 0;
+    // If the ball slows, it becomes "unarmed" and stays on the ground.
+    // The furry one must run over it to pick it up.
+    if (vecLen(b.vx, b.vy) < 55) {
+      b.armed = false;
     }
   }
 }
