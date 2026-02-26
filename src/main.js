@@ -310,6 +310,13 @@ function update(dt) {
   // ball follow/physics
   const b = state.ball;
   const it = currentIt();
+
+  // Invariants: only the current "it" can hold the ball.
+  if (it && b.heldBy && b.heldBy !== it.id) {
+    b.heldBy = it.id;
+    b.lastThrower = null;
+  }
+
   if (b.heldBy) {
     const holder = state.players.find(p => p.id === b.heldBy);
     if (holder) {
@@ -430,6 +437,13 @@ function draw() {
     ctx.font = '12px ui-sans-serif, system-ui';
     ctx.textAlign = 'center';
     ctx.fillText(p.name, p.x, p.y - PLAYER_RADIUS - 12);
+
+    // extra clarity
+    if (p.it) {
+      ctx.fillStyle = 'rgba(245,158,11,.95)';
+      ctx.font = '11px ui-sans-serif, system-ui';
+      ctx.fillText('IT', p.x, p.y + PLAYER_RADIUS + 16);
+    }
   }
 
   // ball
