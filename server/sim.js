@@ -457,13 +457,13 @@ export function createWorld(opts = {}) {
     }
   }
 
+  const ENDLESS_ONLINE = process.env.ENDLESS_ONLINE !== '0';
+
   function step(dt) {
     world.nowMs += dt * 1000;
     const now = world.nowMs;
 
-    if (world.over) return;
-
-    // scoring + win
+    // scoring (+ optional win)
     const it = currentIt();
     for (const p of world.players) {
       if (p.it) {
@@ -475,7 +475,7 @@ export function createWorld(opts = {}) {
         const pts = C.PROX_POINTS_PER_SEC * (closeness01 ** 1.6) * dt;
         p.score += pts;
       }
-      if (p.score >= C.WIN_POINTS && !world.over) {
+      if (!ENDLESS_ONLINE && p.score >= C.WIN_POINTS && !world.over) {
         world.over = true;
         world.winnerId = p.id;
       }

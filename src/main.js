@@ -73,11 +73,12 @@ app.innerHTML = `
 
   <div class="overlay" id="overlay">
     <div class="modal">
-      <h2 id="endTitle">Game over</h2>
-      <p id="endSub">First to 100 points wins.</p>
+      <h2 id="endTitle">Choose mode</h2>
+      <p id="endSub">Play offline (first to 100) or join the live online game (endless).</p>
       <div class="rows" id="endRows"></div>
       <div class="actions">
-        <button class="btn" id="playAgain">Play again</button>
+        <button class="btn" id="playOffline">Play offline</button>
+        <button class="btn" id="playOnline">Play online</button>
       </div>
     </div>
   </div>
@@ -174,6 +175,8 @@ function makePlayer(id, name, isHuman = false) {
 const state = {
   nowMs: performance.now(),
   lastT: performance.now(),
+
+  mode: null, // 'offline' | 'online'
   online: false,
   wsReady: false,
   playerId: null,
@@ -697,19 +700,25 @@ function draw() {
   const ball = R.ball || null;
   const it = players.find(p => p.it);
 
-  // endgame overlay
+  // overlay: mode picker (pre-game) OR offline end screen
   const overlay = document.querySelector('#overlay');
-  if (state.over && state.winnerId) {
+  const endTitle = document.querySelector('#endTitle');
+  const endSub = document.querySelector('#endSub');
+  const endRows = document.querySelector('#endRows');
+
+  if (!state.mode) {
+    overlay?.classList.add('on');
+    if (endTitle) endTitle.textContent = 'Choose mode';
+    if (endSub) endSub.textContent = 'Play offline (first to 100) or join the live online game (endless).';
+    if (endRows) endRows.innerHTML = '';
+  } else if (state.mode === 'offline' && state.over && state.winnerId) {
     overlay?.classList.add('on');
     const wP = state.players.find(p => p.id === state.winnerId);
-    const endTitle = document.querySelector('#endTitle');
-    const endSub = document.querySelector('#endSub');
-    const endRows = document.querySelector('#endRows');
     if (endTitle) endTitle.textContent = `${wP?.name || 'Someone'} wins!`;
-    if (endSub) endSub.textContent = `First to ${WIN_POINTS} points. Press Enter or Play again.`;
+    if (endSub) endSub.textContent = `First to ${WIN_POINTS} points. Press Enter or Reset.`;
     if (endRows) {
       const sorted = [...state.players].sort((a,b) => (b.score||0) - (a.score||0));
-    endRows.innerHTML = sorted.map(p => {
+      endRows.innerHTML = sorted.map(p => {
         const pts = (p.score || 0).toFixed(0);
         const furry = (p.furryMs/1000).toFixed(1);
         const you = p.id === (state.playerId || 'me') ? ' (you)' : (p.human ? ' (player)' : '');
@@ -1143,11 +1152,28 @@ resetBtn.addEventListener('click', () => {
   }
 });
 
-document.querySelector('#playAgain')?.addEventListener('click', () => {
-  if (state.online && ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'reset' }));
-  } else {
-    resetGameOffline();
+// Mode selection buttons
+const playOfflineBtn = document.querySelector('#playOffline');
+const playOnlineBtn = document.querySelector('#playOnline');
+
+playOfflineBtn?.addEventListener('click', () => {
+  state.mode = 'offline';
+  state.online = false;
+  state.wsReady = false;
+  stopInputLoop();
+  if (ws) {
+    try { ws.close(); } catch {}
+    ws = null;
+  }
+  resetGameOffline();
+});
+
+playOnlineBtn?.addEventListener('click', () => {
+  state.mode = 'online';
+  try { connectOnline(); } catch {
+    // if connect fails, stay offline but keep the choice visible
+    state.mode = null;
+    state.online = false;
   }
 });
 
@@ -1162,19 +1188,9 @@ window.addEventListener('keydown', (e) => {
 resize();
 resetGameOffline();
 
-// Try online, fallback to offline if it doesn't connect quickly.
-const onlineTimeout = setTimeout(() => {
-  if (!state.wsReady) {
-    // stay offline
-    state.online = false;
-  }
-}, 1500);
+// Start with mode picker.
+state.mode = null;
+state.online = false;
+state.wsReady = false;
 
-try {
-  connectOnline();
-} catch {
-  state.online = false;
-}
-
-setTimeout(() => clearTimeout(onlineTimeout), 1600);
 loop();
