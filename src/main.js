@@ -112,6 +112,7 @@ function makePlayer(id, name, isHuman=false) {
     it: false,
     furryMs: 0,
     lastHitAt: -1e9,
+    lastThrowAt: -1e9,
   };
 }
 
@@ -219,13 +220,21 @@ function moveBot(p, dt) {
   p.vx *= Math.pow(FRICTION, dt*60);
   p.vy *= Math.pow(FRICTION, dt*60);
 
-  // bot throw logic (only if it)
+  // bot throw logic (only if it + holding ball)
   if (p.it && state.ball.heldBy === p.id) {
     const now = performance.now();
-    if (best < 520 && (now - p.lastHitAt) > 800) {
-      // throw with some charge
-      const charge = 0.55 + 0.35 * rand01();
+
+    // Keep it simple: throw fairly often once within range.
+    // (Bots should visibly "use the ball" even in this prototype.)
+    const inRange = best < 820;
+    const cooldownOk = (now - p.lastThrowAt) > 900;
+
+    if (inRange && cooldownOk) {
+      // throw harder when farther (but not always max)
+      const dist01 = clamp(best / 820, 0, 1);
+      const charge = clamp(0.45 + 0.45 * dist01 + 0.10 * rand01(), 0.35, 0.95);
       botThrow(p, nearest, charge);
+      p.lastThrowAt = now;
     }
   }
 }
@@ -426,8 +435,22 @@ function draw() {
   // ball
   const b = state.ball;
   if (b) {
+    // If held, draw a small tether so it's obvious who has it.
+    if (b.heldBy) {
+      const holder = state.players.find(p => p.id === b.heldBy);
+      if (holder) {
+        ctx.strokeStyle = 'rgba(167,139,250,.35)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(holder.x, holder.y);
+        ctx.lineTo(b.x, b.y - (PLAYER_RADIUS + 10));
+        ctx.stroke();
+      }
+    }
+
+    const by = b.heldBy ? (b.y - (PLAYER_RADIUS + 10)) : b.y;
     ctx.beginPath();
-    ctx.arc(b.x, b.y, BALL_RADIUS, 0, TAU);
+    ctx.arc(b.x, by, BALL_RADIUS, 0, TAU);
     ctx.fillStyle = COLORS.ball;
     ctx.fill();
     ctx.strokeStyle = 'rgba(0,0,0,.35)';
