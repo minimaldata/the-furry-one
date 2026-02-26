@@ -844,19 +844,58 @@ function draw() {
     if (p.id === leader.id) {
       const t = performance.now() / 1000;
       const win01 = clamp((p.score || 0) / WIN_POINTS, 0, 1);
-      const spikes = 18;
-      const base = PLAYER_RADIUS + 6;
-      const len = 6 + 26 * (win01 ** 1.2);
-      ctx.strokeStyle = 'rgba(245,158,11,.85)';
-      ctx.lineWidth = 3;
-      for (let i=0;i<spikes;i++) {
-        const a = (i / spikes) * TAU;
-        const wob = 0.65 + 0.35 * Math.sin(t*3 + i*1.7);
-        const r1 = base;
-        const r2 = base + len * wob;
+
+      // Make it feel like "fur": many thin, slightly curved, irregular strands.
+      // Avoid perfect radial symmetry (which reads as a sun).
+      const strands = 46;
+      const baseR = PLAYER_RADIUS + 3;
+      const maxLen = 8 + 28 * (win01 ** 1.25);
+
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = 'rgba(245,158,11,.72)';
+
+      for (let i = 0; i < strands; i++) {
+        // pseudo-random but stable-ish by player id length + i
+        const seed = (p.id.length * 97 + i * 31);
+        const jitterA = Math.sin(seed * 12.9898) * 43758.5453;
+        const r01 = jitterA - Math.floor(jitterA);
+
+        const a = (i / strands) * TAU + (r01 - 0.5) * 0.28;
+        const wob = 0.55 + 0.45 * Math.sin(t * (2.2 + 0.6 * r01) + i * 0.37);
+        const len = maxLen * (0.35 + 0.65 * wob) * (0.55 + 0.45 * r01);
+
+        // curve sideways a bit so it feels hairy, not spiky
+        const bend = (r01 - 0.5) * 0.9;
+        const nx = Math.cos(a);
+        const ny = Math.sin(a);
+        const tx = -ny;
+        const ty = nx;
+
+        const x0 = p.x + nx * baseR;
+        const y0 = p.y + ny * baseR;
+        const x2 = p.x + nx * (baseR + len);
+        const y2 = p.y + ny * (baseR + len);
+        const x1 = p.x + nx * (baseR + len * 0.55) + tx * bend * (6 + 10 * win01);
+        const y1 = p.y + ny * (baseR + len * 0.55) + ty * bend * (6 + 10 * win01);
+
         ctx.beginPath();
-        ctx.moveTo(p.x + Math.cos(a)*r1, p.y + Math.sin(a)*r1);
-        ctx.lineTo(p.x + Math.cos(a)*r2, p.y + Math.sin(a)*r2);
+        ctx.moveTo(x0, y0);
+        ctx.quadraticCurveTo(x1, y1, x2, y2);
+        ctx.stroke();
+      }
+
+      // subtle inner fuzz layer
+      ctx.strokeStyle = 'rgba(245,158,11,.35)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < 18; i++) {
+        const a = (i / 18) * TAU + Math.sin(t*2 + i) * 0.1;
+        const nx = Math.cos(a);
+        const ny = Math.sin(a);
+        const len = 6 + 10 * win01;
+        ctx.beginPath();
+        ctx.moveTo(p.x + nx * (PLAYER_RADIUS + 1), p.y + ny * (PLAYER_RADIUS + 1));
+        ctx.lineTo(p.x + nx * (PLAYER_RADIUS + 1 + len), p.y + ny * (PLAYER_RADIUS + 1 + len));
         ctx.stroke();
       }
     }
