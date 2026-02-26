@@ -789,12 +789,12 @@ function draw() {
   }
 
   // leader fur
-  let leader = state.players[0];
-  for (const p of state.players) if ((p.score || 0) > (leader.score || 0)) leader = p;
+  let leader = players[0];
+  for (const p of players) if (leader && (p.score || 0) > (leader.score || 0)) leader = p;
 
-  for (const p of state.players) {
+  for (const p of players) {
     if (leader && p.id === leader.id) {
-      const t = state.nowMs / 1000;
+      const t = performance.now() / 1000;
       const win01 = clamp((p.score || 0) / WIN_POINTS, 0, 1);
       const strands = 46;
       const baseR = PLAYER_RADIUS + 3;
@@ -908,9 +908,9 @@ function draw() {
   else statusEl.textContent = `${mode} · waiting for IT…`;
 
   const meStatsEl = document.querySelector('#meStats');
-  const sorted = [...state.players].sort((a,b) => (b.score || 0) - (a.score || 0));
+  const sorted = [...players].sort((a,b) => (b.score || 0) - (a.score || 0));
   const myId = (state.playerId || 'me');
-  const me = state.players.find(p => p.id === myId);
+  const me = players.find(p => p.id === myId);
   if (meStatsEl && me) {
     const rank = sorted.findIndex(p => p.id === myId) + 1;
     const pts = (me.score || 0).toFixed(0);
@@ -932,7 +932,7 @@ let inputSeq = 0;
 let inputTimer = null;
 
 // Net smoothing
-const RENDER_DELAY_MS = 120; // interpolate slightly "in the past" for smoothness
+const RENDER_DELAY_MS = 80; // interpolate slightly "in the past" for smoothness
 const MAX_SNAPSHOT_AGE_MS = 2000;
 state.snapshots = []; // { recvMs, nowMs, players, obstacles, ball, over, winnerId }
 
