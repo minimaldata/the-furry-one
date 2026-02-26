@@ -212,14 +212,22 @@ function moveBot(p, dt) {
   }
 
   let tx = p.x, ty = p.y;
+
+  const b = state.ball;
   if (p.it) {
-    tx = nearest.x;
-    ty = nearest.y;
+    // If you're IT and the ball isn't in your hand, your #1 job is to go pick it up.
+    if (b && !b.heldBy) {
+      tx = b.x;
+      ty = b.y;
+    } else {
+      // otherwise chase a target
+      tx = nearest.x;
+      ty = nearest.y;
+    }
   } else {
     // flee from the real threat: the ball-in-flight (primary) otherwise the furry one.
     let threatX = it.x;
     let threatY = it.y;
-    const b = state.ball;
 
     if (b && !b.heldBy) {
       // predict where the ball will be shortly (gives bots a chance to dodge)
