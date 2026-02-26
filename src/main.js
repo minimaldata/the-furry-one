@@ -87,9 +87,14 @@ const BALL_FRICTION = 0.992;
 const BOT_COUNT = 14;
 const HIT_COOLDOWN_MS = 450;
 
-// Proximity scoring (only when you're NOT it): reward staying near danger.
+// Scoring:
+// - First to 100 points wins.
+// - When you're NOT it: earn points for staying close to the furry one.
+// - When you ARE it: you bleed points over time.
+const WIN_POINTS = 100;
 const PROX_MAX_DIST = 260; // px; beyond this, no points
-const PROX_POINTS_PER_SEC = 12; // max points/sec at distance ~0
+const PROX_POINTS_PER_SEC = 16; // max points/sec at distance ~0
+const IT_BLEED_POINTS_PER_SEC = 14;
 
 const COLORS = {
   arena: '#0a0d14',
@@ -115,7 +120,7 @@ function makePlayer(id, name, isHuman=false) {
     vy: 0,
     it: false,
     furryMs: 0,
-    proxPoints: 0,
+    score: 0,
     lastHitAt: -1e9,
     lastThrowAt: -1e9,
   };
@@ -139,6 +144,9 @@ function resetGame() {
   ];
   // choose random it
   state.players[Math.floor(rand01()*state.players.length)].it = true;
+  state.over = false;
+  state.winnerId = null;
+
   state.ball = {
     x: W()/2,
     y: H()/2,
@@ -161,6 +169,8 @@ const state = {
   ball: null,
   throwCharge: 0,
   wasMouseDown: false,
+  over: false,
+  winnerId: null,
 };
 
 function currentIt() { return state.players.find(p => p.it); }
@@ -390,16 +400,24 @@ function botThrow(bot, target, charge01) {
 function update(dt) {
   const now = performance.now();
 
-  // accumulate furry time + proximity points
+  if (state.over) return;
+
+  // scoring + furry time
   const it = currentIt();
   for (const p of state.players) {
-    if (p.it) p.furryMs += dt * 1000;
-    else if (it) {
+    if (p.it) {
+      p.furryMs += dt * 1000;
+      p.score = Math.max(0, p.score - IT_BLEED_POINTS_PER_SEC * dt);
+    } else if (it) {
       const d = vecLen(p.x - it.x, p.y - it.y);
       const closeness01 = clamp(1 - (d / PROX_MAX_DIST), 0, 1);
-      // reward near-danger time; taper nonlinearly so "very close" is meaningfully better
       const pts = PROX_POINTS_PER_SEC * (closeness01 ** 1.6) * dt;
-      p.proxPoints += pts;
+      p.score += pts;
+    }
+
+    if (p.score >= WIN_POINTS && !state.over) {
+      state.over = true;
+      state.winnerId = p.id;
     }
   }
 
@@ -605,14 +623,20 @@ function draw() {
   if (it) statusEl.textContent = `${it.name} is the furry one`;
 
   const scoreEl = document.querySelector('#score');
-  const sorted = [...state.players].sort((a,b) => a.furryMs - b.furryMs);
-  scoreEl.innerHTML = `<b>Least furry time wins</b><br><span style="color:rgba(255,255,255,.7)">(+ proximity points when not it)</span><br>` + sorted.map(p => {
+  const sorted = [...state.players].sort((a,b) => b.score - a.score);
+  scoreEl.innerHTML = `<b>First to ${WIN_POINTS} wins</b><br><span style="color:rgba(255,255,255,.7)">Gain points near IT · Lose points while IT</span><br>` + sorted.map(p => {
     const s = (p.furryMs/1000).toFixed(1);
-    const pts = Math.floor(p.proxPoints);
+    const pts = p.score.toFixed(0);
     const tag = p.it ? ' <span style="color:#f59e0b">(it)</span>' : '';
     const you = p.human ? ' <span style="color:#22c55e">(you)</span>' : '';
-    return `${p.name}: ${s}s · ${pts}pts${you}${tag}`;
+    return `${p.name}: ${pts} · ${s}s${you}${tag}`;
   }).join('<br>');
+
+  if (state.over && state.winnerId) {
+    const w = state.players.find(p => p.id === state.winnerId);
+    const statusEl = document.querySelector('#status');
+    statusEl.textContent = `${w?.name || 'Someone'} wins — press Reset (or Enter)`;
+  }
 }
 
 function loop() {
@@ -627,6 +651,10 @@ function loop() {
 }
 
 document.querySelector('#reset').addEventListener('click', resetGame);
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && state.over) resetGame();
+});
 
 resize();
 resetGame();
