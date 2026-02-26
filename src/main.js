@@ -931,8 +931,12 @@ let ws = null;
 let inputSeq = 0;
 let inputTimer = null;
 
+// Inactivity kick
+const INACTIVITY_KICK_MS = 5000;
+state.lastMoveAtMs = performance.now();
+
 // Net smoothing
-const RENDER_DELAY_MS = 80; // interpolate slightly "in the past" for smoothness
+const RENDER_DELAY_MS = 50; // interpolate slightly "in the past" for smoothness
 const MAX_SNAPSHOT_AGE_MS = 2000;
 state.snapshots = []; // { recvMs, nowMs, players, obstacles, ball, over, winnerId }
 
@@ -965,6 +969,7 @@ function connectOnline() {
   ws = new WebSocket(url);
 
   ws.addEventListener('open', () => {
+    state.lastMoveAtMs = performance.now();
     ws.send(JSON.stringify({ type: 'join', playerId: storedId, name }));
   });
 
@@ -1042,9 +1047,32 @@ function getRenderSnapshot() {
   const latest = snaps[snaps.length - 1];
   const targetNowMs = (latest.nowMs || 0) - RENDER_DELAY_MS;
 
+  // If we're very close to latest, allow a tiny extrapolation window to reduce "behind" feel.
+  const EXTRAP_MAX_MS = 90;
+
   // Find two snapshots around targetNowMs
   let a = null;
   let b = latest;
+
+  // If target is newer than latest snapshot, extrapolate from latest for a short window.
+  if (targetNowMs > (latest.nowMs || 0)) {
+    const ahead = clamp(targetNowMs - (latest.nowMs || 0), 0, EXTRAP_MAX_MS);
+
+    const players = (latest.players || []).map(p => {
+      const out = { ...p };
+      if (typeof out.x === 'number' && typeof out.vx === 'number') out.x = out.x + out.vx * (ahead / 1000);
+      if (typeof out.y === 'number' && typeof out.vy === 'number') out.y = out.y + out.vy * (ahead / 1000);
+      return out;
+    });
+
+    let ball = latest.ball ? { ...latest.ball } : null;
+    if (ball && !ball.heldBy) {
+      if (typeof ball.x === 'number' && typeof ball.vx === 'number') ball.x = ball.x + ball.vx * (ahead / 1000);
+      if (typeof ball.y === 'number' && typeof ball.vy === 'number') ball.y = ball.y + ball.vy * (ahead / 1000);
+    }
+
+    return { players, obstacles: latest.obstacles || [], ball };
+  }
   for (let i = snaps.length - 1; i >= 0; i--) {
     if ((snaps[i].nowMs || 0) <= targetNowMs) {
       a = snaps[i];
@@ -1101,6 +1129,9 @@ function buildInput() {
   const lf = keys.has('ArrowLeft') || keys.has('a') || keys.has('A');
   const rt = keys.has('ArrowRight') || keys.has('d') || keys.has('D');
   const spaceDown = keys.has(' ');
+
+  if (up || dn || lf || rt) state.lastMoveAtMs = performance.now();
+
   return {
     type: 'input',
     seq: ++inputSeq,
@@ -1128,10 +1159,34 @@ function stopInputLoop() {
 }
 
 // Main loop
+function kickToHome(reason = 'inactive') {
+  state.mode = null;
+  state.online = false;
+  state.wsReady = false;
+  stopInputLoop();
+  if (ws) {
+    try { ws.close(); } catch {}
+    ws = null;
+  }
+  // reset offline so the background isn't stale
+  resetGameOffline();
+  state.lastMoveAtMs = performance.now();
+
+  const statusEl = document.querySelector('#status');
+  if (statusEl && reason === 'inactive') statusEl.textContent = 'Offline · kicked for inactivity';
+}
+
 function loop() {
   const now = performance.now();
   const dt = clamp((now - state.lastT) / 1000, 0, 0.05);
   state.lastT = now;
+
+  // inactivity kick (online only)
+  if (state.mode === 'online' && state.wsReady) {
+    if ((now - (state.lastMoveAtMs || now)) > INACTIVITY_KICK_MS) {
+      kickToHome('inactive');
+    }
+  }
 
   if (!state.online) {
     state.nowMs = now;
@@ -1170,8 +1225,8 @@ playOfflineBtn?.addEventListener('click', () => {
 
 playOnlineBtn?.addEventListener('click', () => {
   state.mode = 'online';
+  state.lastMoveAtMs = performance.now();
   try { connectOnline(); } catch {
-    // if connect fails, stay offline but keep the choice visible
     state.mode = null;
     state.online = false;
   }
