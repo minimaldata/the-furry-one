@@ -334,11 +334,18 @@ function moveBot(p, dt) {
     if (b && !b.heldBy) { tx = b.x; ty = b.y; }
     else { tx = nearest.x; ty = nearest.y; }
   } else {
-    const SWEET = 140;
-    const FAR = 280;
+    // Not IT: stay close to IT to farm points.
+    // If IT doesn't have the ball AND the ball is loose/slow, it's a "safe window" to crowd them.
     const bestScoreNow = Math.max(...state.players.map(x => x.score || 0));
     const behind01 = clamp((bestScoreNow - (p.score || 0)) / WIN_POINTS, 0, 1);
     const risk = 0.55 + 0.35 * behind01;
+
+    const itHasBall = (b && b.heldBy === it.id);
+    const ballIsLooseSlow = (b && !b.heldBy && vecLen(b.vx, b.vy) < 220);
+    const safeWindow = (!itHasBall) && ballIsLooseSlow;
+
+    const SWEET = safeWindow ? 80 : 140;
+    const FAR = safeWindow ? 170 : 280;
     const desiredDist = lerp(FAR, SWEET, risk);
 
     const dxIT = p.x - it.x;

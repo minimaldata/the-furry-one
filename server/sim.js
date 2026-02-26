@@ -351,11 +351,18 @@ export function createWorld(opts = {}) {
         tx = nearest.x; ty = nearest.y;
       }
     } else {
-      const SWEET = 140;
-      const FAR = 280;
+      // Not IT: farm points by staying close to IT, but manage threat.
+      // Key idea: if IT doesn't have the ball, it's a "safe window" to get closer.
       const bestScoreNow = Math.max(...world.players.map(x => x.score || 0));
       const behind01 = clamp((bestScoreNow - (p.score || 0)) / C.WIN_POINTS, 0, 1);
       const risk = 0.55 + 0.35 * behind01;
+
+      const itHasBall = (b && b.heldBy === it.id);
+      const ballIsLooseSlow = (b && !b.heldBy && vecLen(b.vx, b.vy) < 220);
+      const safeWindow = (!itHasBall) && ballIsLooseSlow;
+
+      const SWEET = safeWindow ? 80 : 140;
+      const FAR = safeWindow ? 170 : 280;
       const desiredDist = lerp(FAR, SWEET, risk);
 
       const dxIT = p.x - it.x;
