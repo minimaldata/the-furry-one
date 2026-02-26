@@ -94,7 +94,7 @@ const HIT_COOLDOWN_MS = 450;
 const WIN_POINTS = 100;
 const PROX_MAX_DIST = 260; // px; beyond this, no points
 const PROX_POINTS_PER_SEC = 16; // max points/sec at distance ~0
-const IT_BLEED_POINTS_PER_SEC = 14;
+const IT_BLEED_POINTS_PER_SEC = 6;
 
 const COLORS = {
   arena: '#0a0d14',
@@ -123,6 +123,13 @@ function makePlayer(id, name, isHuman=false) {
     score: 0,
     lastHitAt: -1e9,
     lastThrowAt: -1e9,
+
+    // telegraphing
+    aiming: false,
+    aimCharge: 0,
+    aimX: 0,
+    aimY: 0,
+    throwPlan: null,
   };
 }
 
@@ -159,6 +166,17 @@ function resetGame() {
   };
   state.throwCharge = 0;
   state.wasMouseDown = false;
+  state.wasSpaceDown = false;
+  state.spaceDownAt = 0;
+
+  // clear bot telegraph state
+  for (const p of state.players) {
+    p.aiming = false;
+    p.aimCharge = 0;
+    p.aimX = p.x;
+    p.aimY = p.y;
+    p.throwPlan = null;
+  }
 }
 
 const state = {
@@ -169,6 +187,8 @@ const state = {
   ball: null,
   throwCharge: 0,
   wasMouseDown: false,
+  wasSpaceDown: false,
+  spaceDownAt: 0,
   over: false,
   winnerId: null,
 };
@@ -299,18 +319,53 @@ function moveBot(p, dt) {
   if (p.it && state.ball.heldBy === p.id) {
     const now = performance.now();
 
-    // Keep it simple: throw fairly often once within range.
-    // (Bots should visibly "use the ball" even in this prototype.)
-    const inRange = best < 820;
-    const cooldownOk = (now - p.lastThrowAt) > 900;
+    // Telegraph + then throw (so humans can dodge the aim, not just the ball).
+    const inRange = best < 900;
+    const cooldownOk = (now - p.lastThrowAt) > 950;
 
-    if (inRange && cooldownOk) {
-      // throw harder when farther (but not always max)
-      const dist01 = clamp(best / 820, 0, 1);
-      const charge = clamp(0.45 + 0.45 * dist01 + 0.10 * rand01(), 0.35, 0.95);
-      botThrow(p, nearest, charge);
-      p.lastThrowAt = now;
+    if (!p.throwPlan && inRange && cooldownOk) {
+      // plan a throw
+      const dist01 = clamp(best / 900, 0, 1);
+      const targetCharge = clamp(0.40 + 0.50 * dist01 + 0.10 * rand01(), 0.30, 0.95);
+
+      // lead slightly
+      const leadT = 0.16 + 0.12 * rand01();
+      const aimX = nearest.x + nearest.vx * leadT;
+      const aimY = nearest.y + nearest.vy * leadT;
+
+      p.throwPlan = {
+        startAt: now,
+        aimX,
+        aimY,
+        targetCharge,
+        windupMs: 420 + 220 * rand01(),
+      };
+      p.aiming = true;
+      p.aimCharge = 0;
+      p.aimX = aimX;
+      p.aimY = aimY;
     }
+
+    if (p.throwPlan) {
+      const t = clamp((now - p.throwPlan.startAt) / p.throwPlan.windupMs, 0, 1);
+      p.aiming = true;
+      p.aimX = p.throwPlan.aimX;
+      p.aimY = p.throwPlan.aimY;
+      p.aimCharge = t * p.throwPlan.targetCharge;
+
+      if (t >= 1) {
+        releaseThrow(p, p.throwPlan.aimX, p.throwPlan.aimY, p.throwPlan.targetCharge);
+        p.lastThrowAt = now;
+        p.throwPlan = null;
+        p.aiming = false;
+        p.aimCharge = 0;
+      }
+    }
+  } else {
+    // clear telegraph if not holding
+    p.throwPlan = null;
+    p.aiming = false;
+    p.aimCharge = 0;
   }
 }
 
@@ -462,18 +517,38 @@ function update(dt) {
       b.vx = 0;
       b.vy = 0;
 
-      // human throw
+      // human throw (mouse OR spacebar)
       if (holder.human && holder.it) {
+        const space = keys.has(' ');
         const md = mouse.down;
-        if (md) {
-          const t = clamp((now - mouse.downAt) / CHARGE_MS, 0, 1);
+
+        // update telegraph so others can see your aim/power
+        holder.aiming = md || space;
+        holder.aimX = mouse.x;
+        holder.aimY = mouse.y;
+
+        if (space && !state.wasSpaceDown) state.spaceDownAt = now;
+
+        const charging = md || space;
+        if (charging) {
+          const start = md ? mouse.downAt : state.spaceDownAt;
+          const t = clamp((now - start) / CHARGE_MS, 0, 1);
           state.throwCharge = t;
+          holder.aimCharge = t;
         }
-        if (!md && state.wasMouseDown) {
+
+        // release on mouse up OR space up
+        const releasedMouse = (!md && state.wasMouseDown);
+        const releasedSpace = (!space && state.wasSpaceDown);
+        if (releasedMouse || releasedSpace) {
           releaseThrow(holder, mouse.x, mouse.y, state.throwCharge);
           state.throwCharge = 0;
+          holder.aiming = false;
+          holder.aimCharge = 0;
         }
+
         state.wasMouseDown = md;
+        state.wasSpaceDown = space;
       }
     }
   } else {
@@ -554,27 +629,31 @@ function draw() {
     ctx.stroke();
   }
 
-  // aim indicator for human when it
-  const me = state.players.find(p => p.human);
-  if (me?.it && state.ball?.heldBy === me.id) {
-    const dx = mouse.x - me.x;
-    const dy = mouse.y - me.y;
-    const [nx, ny] = vecNorm(dx, dy);
-    const charge = mouse.down ? clamp((performance.now() - mouse.downAt)/CHARGE_MS, 0, 1) : 0;
-    const len = lerp(60, 160, charge);
+  // aim indicator for anyone who is IT and currently aiming/charging
+  for (const p of state.players) {
+    if (!p.it) continue;
+    if (!p.aiming) continue;
+    if (!state.ball?.heldBy || state.ball.heldBy !== p.id) continue;
 
-    ctx.strokeStyle = COLORS.aim;
-    ctx.lineWidth = 8;
+    const dx = (p.aimX ?? p.x) - p.x;
+    const dy = (p.aimY ?? p.y) - p.y;
+    const [nx, ny] = vecNorm(dx, dy);
+    const charge = clamp(p.aimCharge || 0, 0, 1);
+    const len = lerp(70, 220, charge);
+
+    ctx.strokeStyle = p.human ? 'rgba(34,197,94,.30)' : COLORS.aim;
+    ctx.lineWidth = 10;
     ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(me.x, me.y);
-    ctx.lineTo(me.x + nx * len, me.y + ny * len);
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(p.x + nx * len, p.y + ny * len);
     ctx.stroke();
 
+    // small target ring (subtle)
     ctx.lineWidth = 2;
-    ctx.strokeStyle = 'rgba(255,255,255,.18)';
+    ctx.strokeStyle = 'rgba(255,255,255,.16)';
     ctx.beginPath();
-    ctx.arc(mouse.x, mouse.y, 14, 0, TAU);
+    ctx.arc(p.x + nx * (len + 18), p.y + ny * (len + 18), 12, 0, TAU);
     ctx.stroke();
   }
 
