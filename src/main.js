@@ -84,7 +84,7 @@ const MIN_THROW_SPEED = 220;
 const CHARGE_MS = 900;
 const FRICTION = 0.90;
 const BALL_FRICTION = 0.992;
-const BOT_COUNT = 4;
+const BOT_COUNT = 14;
 const HIT_COOLDOWN_MS = 450;
 
 // Proximity scoring (only when you're NOT it): reward staying near danger.
@@ -185,7 +185,7 @@ function moveHuman(p, dt) {
   if (rt) ax += 1;
   const [nx, ny] = vecNorm(ax, ay);
 
-  const speed = 540;
+  const speed = 1080;
   p.vx = lerp(p.vx, nx * speed, 1 - Math.pow(0.001, dt));
   p.vy = lerp(p.vy, ny * speed, 1 - Math.pow(0.001, dt));
 
@@ -259,7 +259,7 @@ function moveBot(p, dt) {
   const dx = tx - p.x;
   const dy = ty - p.y;
   const [nx, ny] = vecNorm(dx, dy);
-  const speed = 410;
+  const speed = 820;
   p.vx = lerp(p.vx, nx * speed, 1 - Math.pow(0.01, dt));
   p.vy = lerp(p.vy, ny * speed, 1 - Math.pow(0.01, dt));
 
