@@ -112,6 +112,7 @@ const FRICTION = 0.90;
 const BALL_FRICTION = 0.992;
 const BOT_COUNT = 14;
 const HIT_COOLDOWN_MS = 450;
+const TOUCH_TAG_COOLDOWN_MS = 650;
 
 // Scoring:
 // - First to 100 points wins.
@@ -646,6 +647,24 @@ function update(dt) {
       b.y = holder.y;
       b.vx = 0;
       b.vy = 0;
+
+      // Touch-tag: if IT is holding the ball, colliding with someone tags them.
+      // Use cooldown via lastHitAt to avoid immediate ping-pong loops.
+      if (it && holder.id === it.id) {
+        for (const other of state.players) {
+          if (other.id === holder.id) continue;
+          const d = vecLen(other.x - holder.x, other.y - holder.y);
+          if (d > PLAYER_RADIUS * 2) continue;
+
+          const canTag = (now - holder.lastHitAt) > TOUCH_TAG_COOLDOWN_MS && (now - other.lastHitAt) > TOUCH_TAG_COOLDOWN_MS;
+          if (!canTag) continue;
+
+          holder.lastHitAt = now;
+          other.lastHitAt = now;
+          setIt(other.id);
+          break;
+        }
+      }
 
       // human throw (mouse OR spacebar)
       if (holder.human && holder.it) {
