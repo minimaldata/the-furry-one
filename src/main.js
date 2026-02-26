@@ -40,6 +40,18 @@ app.innerHTML = `
     </div>
   </div>
   <div class="canvasWrap"><canvas id="c"></canvas></div>
+
+  <div class="overlay" id="overlay">
+    <div class="modal">
+      <h2 id="endTitle">Game over</h2>
+      <p id="endSub">First to 100 points wins.</p>
+      <div class="rows" id="endRows"></div>
+      <div class="actions">
+        <button class="btn" id="playAgain">Play again</button>
+      </div>
+    </div>
+  </div>
+
   <div class="help">
     <div class="card"><div class="small"><b>Move</b>: WASD / Arrows<br><b>Throw</b> (only when it): mouse aim + hold/release</div></div>
     <div class="card"><div class="small" id="score"></div></div>
@@ -240,20 +252,82 @@ function moveHuman(p, dt) {
   p.vy *= Math.pow(FRICTION, dt*60);
 }
 
+function segmentIntersectsRect(x1, y1, x2, y2, r) {
+  // Liang–Barsky style parametric clipping against axis-aligned rect
+  // Returns true if segment intersects rect interior.
+  const minX = r.x, maxX = r.x + r.w;
+  const minY = r.y, maxY = r.y + r.h;
+  let t0 = 0, t1 = 1;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+
+  const clip = (p, q) => {
+    if (p === 0) return q >= 0;
+    const t = q / p;
+    if (p < 0) {
+      if (t > t1) return false;
+      if (t > t0) t0 = t;
+    } else {
+      if (t < t0) return false;
+      if (t < t1) t1 = t;
+    }
+    return true;
+  };
+
+  if (
+    clip(-dx, x1 - minX) &&
+    clip(dx, maxX - x1) &&
+    clip(-dy, y1 - minY) &&
+    clip(dy, maxY - y1)
+  ) {
+    return t0 <= t1;
+  }
+  return false;
+}
+
+function hasClearThrow(fromX, fromY, toX, toY) {
+  // true if segment does NOT cross any obstacle
+  for (const ob of state.obstacles) {
+    if (segmentIntersectsRect(fromX, fromY, toX, toY, ob)) return false;
+  }
+  return true;
+}
+
 function moveBot(p, dt) {
   const it = currentIt();
   if (!it) return;
 
-  // simple behavior:
-  // - if bot is it: chase nearest target and throw when "good-ish" line
-  // - else: run away from it; slight orbit so it doesn't get stuck
+  // Behavior:
+  // - If bot is IT: retrieve ball if needed; otherwise hunt the best target (win-denial + hitability)
+  // - If bot is NOT IT: orbit near IT for points while dodging the ball
 
   const targets = state.players.filter(q => q.id !== p.id);
+
+  // nearest (for some movement defaults)
   let nearest = targets[0];
   let best = 1e9;
   for (const q of targets) {
     const d = vecLen(q.x - p.x, q.y - p.y);
     if (d < best) { best = d; nearest = q; }
+  }
+
+  // pick best throw target: prioritize players close to winning, but still hittable
+  const bestScore = Math.max(...state.players.map(x => x.score || 0));
+  let throwTarget = nearest;
+  let throwBest = -1e18;
+  for (const q of targets) {
+    const d = vecLen(q.x - p.x, q.y - p.y);
+    const leader01 = clamp((q.score || 0) / WIN_POINTS, 0, 1);
+    const closish01 = clamp(1 - d / 900, 0, 1);
+
+    // prefer leaders + closer + (line of sight)
+    const los = hasClearThrow(p.x, p.y, q.x, q.y) ? 1 : 0;
+    const s = (2.2 * leader01 + 0.9 * closish01 + 0.4 * rand01()) * (0.25 + 0.75 * los);
+
+    if (s > throwBest) {
+      throwBest = s;
+      throwTarget = q;
+    }
   }
 
   let tx = p.x, ty = p.y;
@@ -335,18 +409,19 @@ function moveBot(p, dt) {
     const now = performance.now();
 
     // Telegraph + then throw (so humans can dodge the aim, not just the ball).
-    const inRange = best < 900;
+    const inRange = vecLen(throwTarget.x - p.x, throwTarget.y - p.y) < 900;
     const cooldownOk = (now - p.lastThrowAt) > 950;
 
     if (!p.throwPlan && inRange && cooldownOk) {
       // plan a throw
-      const dist01 = clamp(best / 900, 0, 1);
+      const dist01 = clamp(vecLen(throwTarget.x - p.x, throwTarget.y - p.y) / 900, 0, 1);
       const targetCharge = clamp(0.40 + 0.50 * dist01 + 0.10 * rand01(), 0.30, 0.95);
 
-      // lead slightly
-      const leadT = 0.16 + 0.12 * rand01();
-      const aimX = nearest.x + nearest.vx * leadT;
-      const aimY = nearest.y + nearest.vy * leadT;
+      // lead slightly (use chosen target)
+      const tgt = throwTarget;
+      const leadT = 0.16 + 0.14 * rand01();
+      const aimX = tgt.x + tgt.vx * leadT;
+      const aimY = tgt.y + tgt.vy * leadT;
 
       p.throwPlan = {
         startAt: now,
@@ -656,6 +731,29 @@ function update(dt) {
 function draw() {
   const w = W(), h = H();
 
+  // endgame overlay
+  const overlay = document.querySelector('#overlay');
+  if (state.over && state.winnerId) {
+    overlay?.classList.add('on');
+    const wP = state.players.find(p => p.id === state.winnerId);
+    const endTitle = document.querySelector('#endTitle');
+    const endSub = document.querySelector('#endSub');
+    const endRows = document.querySelector('#endRows');
+    if (endTitle) endTitle.textContent = `${wP?.name || 'Someone'} wins!`;
+    if (endSub) endSub.textContent = `First to ${WIN_POINTS} points. Press Enter or Play again.`;
+    if (endRows) {
+      const sorted = [...state.players].sort((a,b) => b.score - a.score);
+      endRows.innerHTML = sorted.map(p => {
+        const pts = (p.score || 0).toFixed(0);
+        const furry = (p.furryMs/1000).toFixed(1);
+        const you = p.human ? ' (you)' : '';
+        return `<div class="row"><div><b>${p.name}${you}</b></div><div>${pts} pts · ${furry}s it</div></div>`;
+      }).join('');
+    }
+  } else {
+    overlay?.classList.remove('on');
+  }
+
   // background
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = COLORS.arena;
@@ -803,6 +901,7 @@ function loop() {
 }
 
 document.querySelector('#reset').addEventListener('click', resetGame);
+document.querySelector('#playAgain')?.addEventListener('click', resetGame);
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && state.over) resetGame();
