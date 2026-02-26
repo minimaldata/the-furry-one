@@ -235,35 +235,52 @@ function moveBot(p, dt) {
       ty = nearest.y;
     }
   } else {
-    // flee from the real threat: the ball-in-flight (primary) otherwise the furry one.
-    let threatX = it.x;
-    let threatY = it.y;
+    // Not IT: bots should try to WIN.
+    // That means hovering near IT (to gain points) while dodging the ball-in-flight.
 
+    // Desired "sweet spot" distance (closer earns points, but too close is risky).
+    const SWEET = 140;
+    const FAR = 280;
+
+    // If you're behind in score, take more risk (play closer).
+    const bestScore = Math.max(...state.players.map(x => x.score || 0));
+    const behind01 = clamp((bestScore - (p.score || 0)) / WIN_POINTS, 0, 1);
+    const risk = 0.55 + 0.35 * behind01; // 0.55..0.90
+
+    let desiredDist = lerp(FAR, SWEET, risk);
+
+    // Build an "orbit near IT" target.
+    const dxIT = p.x - it.x;
+    const dyIT = p.y - it.y;
+    const dIT = vecLen(dxIT, dyIT) || 1;
+    const [nxIT, nyIT] = [dxIT / dIT, dyIT / dIT];
+    const oxIT = -nyIT;
+    const oyIT = nxIT;
+
+    // If too far: move toward IT; if too close: move away; always add orbit.
+    const radialSign = (dIT > desiredDist) ? -1 : 1;
+    const wob = Math.sin(performance.now()/520 + p.id.length) * 0.9;
+
+    let vxGoal = nxIT * radialSign * 1.0 + oxIT * 0.9 * wob;
+    let vyGoal = nyIT * radialSign * 1.0 + oyIT * 0.9 * wob;
+
+    // Dodge ball-in-flight more aggressively when nearby.
     if (b && !b.heldBy) {
-      // predict where the ball will be shortly (gives bots a chance to dodge)
       const tLead = clamp(vecLen(b.vx, b.vy) / 900, 0.10, 0.30);
-      threatX = b.x + b.vx * tLead;
-      threatY = b.y + b.vy * tLead;
-
-      // if the predicted ball is nowhere near us, fallback to the furry one
-      const dBall = vecLen(p.x - threatX, p.y - threatY);
-      if (dBall > 420) {
-        threatX = it.x;
-        threatY = it.y;
+      const bx = b.x + b.vx * tLead;
+      const by = b.y + b.vy * tLead;
+      const dBall = vecLen(p.x - bx, p.y - by);
+      if (dBall < 460) {
+        const [nbx, nby] = vecNorm(p.x - bx, p.y - by);
+        // push away from predicted ball path
+        vxGoal += nbx * 1.8;
+        vyGoal += nby * 1.8;
       }
     }
 
-    const dx = p.x - threatX;
-    const dy = p.y - threatY;
-    const [nx, ny] = vecNorm(dx, dy);
-
-    // small orbit / lateral juke (prevents edge glue)
-    const ox = -ny;
-    const oy = nx;
-    const wob = Math.sin(performance.now()/520 + p.id.length) * 0.8;
-
-    tx = p.x + nx * 140 + ox * 70 * wob;
-    ty = p.y + ny * 140 + oy * 70 * wob;
+    const [nx, ny] = vecNorm(vxGoal, vyGoal);
+    tx = p.x + nx * 160;
+    ty = p.y + ny * 160;
   }
 
   const dx = tx - p.x;
