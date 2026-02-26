@@ -214,15 +214,36 @@ function moveBot(p, dt) {
     tx = nearest.x;
     ty = nearest.y;
   } else {
-    // flee from it
-    const dx = p.x - it.x;
-    const dy = p.y - it.y;
+    // flee from the real threat: the ball-in-flight (primary) otherwise the furry one.
+    let threatX = it.x;
+    let threatY = it.y;
+    const b = state.ball;
+
+    if (b && !b.heldBy) {
+      // predict where the ball will be shortly (gives bots a chance to dodge)
+      const tLead = clamp(vecLen(b.vx, b.vy) / 900, 0.10, 0.30);
+      threatX = b.x + b.vx * tLead;
+      threatY = b.y + b.vy * tLead;
+
+      // if the predicted ball is nowhere near us, fallback to the furry one
+      const dBall = vecLen(p.x - threatX, p.y - threatY);
+      if (dBall > 420) {
+        threatX = it.x;
+        threatY = it.y;
+      }
+    }
+
+    const dx = p.x - threatX;
+    const dy = p.y - threatY;
     const [nx, ny] = vecNorm(dx, dy);
-    // small orbit
+
+    // small orbit / lateral juke (prevents edge glue)
     const ox = -ny;
     const oy = nx;
-    tx = p.x + nx * 120 + ox * 40 * Math.sin(performance.now()/600 + p.id.length);
-    ty = p.y + ny * 120 + oy * 40 * Math.cos(performance.now()/700 + p.id.length);
+    const wob = Math.sin(performance.now()/520 + p.id.length) * 0.8;
+
+    tx = p.x + nx * 140 + ox * 70 * wob;
+    ty = p.y + ny * 140 + oy * 70 * wob;
   }
 
   const dx = tx - p.x;
