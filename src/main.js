@@ -515,6 +515,47 @@ function update(dt) {
     keepInBounds(p);
   }
 
+  // prevent player overlap (simple circle separation)
+  // Run a couple relaxation passes for stability at high speeds.
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 0; i < state.players.length; i++) {
+      for (let j = i + 1; j < state.players.length; j++) {
+        const a = state.players[i];
+        const c = state.players[j];
+        const dx = c.x - a.x;
+        const dy = c.y - a.y;
+        const d = Math.hypot(dx, dy) || 1e-6;
+        const minD = PLAYER_RADIUS * 2;
+        if (d >= minD) continue;
+
+        const overlap = (minD - d);
+        const nx = dx / d;
+        const ny = dy / d;
+
+        // push apart equally
+        a.x -= nx * (overlap * 0.5);
+        a.y -= ny * (overlap * 0.5);
+        c.x += nx * (overlap * 0.5);
+        c.y += ny * (overlap * 0.5);
+
+        // damp relative velocity along collision normal to reduce clumping
+        const rvx = c.vx - a.vx;
+        const rvy = c.vy - a.vy;
+        const vn = rvx * nx + rvy * ny;
+        if (vn < 0) {
+          const impulse = -vn * 0.35;
+          a.vx -= impulse * nx;
+          a.vy -= impulse * ny;
+          c.vx += impulse * nx;
+          c.vy += impulse * ny;
+        }
+
+        keepInBounds(a);
+        keepInBounds(c);
+      }
+    }
+  }
+
   // ball follow/physics
   const b = state.ball;
 
