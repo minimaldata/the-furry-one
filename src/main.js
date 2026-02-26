@@ -87,6 +87,10 @@ const BALL_FRICTION = 0.992;
 const BOT_COUNT = 4;
 const HIT_COOLDOWN_MS = 450;
 
+// Proximity scoring (only when you're NOT it): reward staying near danger.
+const PROX_MAX_DIST = 260; // px; beyond this, no points
+const PROX_POINTS_PER_SEC = 12; // max points/sec at distance ~0
+
 const COLORS = {
   arena: '#0a0d14',
   grid: 'rgba(255,255,255,.04)',
@@ -111,6 +115,7 @@ function makePlayer(id, name, isHuman=false) {
     vy: 0,
     it: false,
     furryMs: 0,
+    proxPoints: 0,
     lastHitAt: -1e9,
     lastThrowAt: -1e9,
   };
@@ -121,6 +126,17 @@ function resetGame() {
   state.lastT = performance.now();
   state.players = [makePlayer('me', 'You', true)];
   for (let i=0;i<BOT_COUNT;i++) state.players.push(makePlayer('b'+i, 'Bot ' + (i+1)));
+
+  // simple obstacles (rectangles)
+  const w = W(), h = H();
+  state.obstacles = [
+    // center blocks
+    { x: w*0.50 - 70, y: h*0.50 - 18, w: 140, h: 36 },
+    { x: w*0.50 - 18, y: h*0.50 - 70, w: 36, h: 140 },
+    // side blocks
+    { x: w*0.18 - 44, y: h*0.30 - 28, w: 88, h: 56 },
+    { x: w*0.82 - 44, y: h*0.70 - 28, w: 88, h: 56 },
+  ];
   // choose random it
   state.players[Math.floor(rand01()*state.players.length)].it = true;
   state.ball = {
@@ -139,6 +155,7 @@ const state = {
   time0: performance.now(),
   lastT: performance.now(),
   players: [],
+  obstacles: [],
   ball: null,
   throwCharge: 0,
   wasMouseDown: false,
@@ -239,11 +256,39 @@ function moveBot(p, dt) {
   }
 }
 
+function resolveCircleRect(px, py, r, rect) {
+  // closest point on rect to circle center
+  const cx = clamp(px, rect.x, rect.x + rect.w);
+  const cy = clamp(py, rect.y, rect.y + rect.h);
+  const dx = px - cx;
+  const dy = py - cy;
+  const d = Math.hypot(dx, dy);
+  if (d >= r || d === 0) return null;
+  const push = (r - d);
+  return { nx: dx / d, ny: dy / d, push };
+}
+
 function keepInBounds(p) {
   const r = PLAYER_RADIUS;
   const w = W(), h = H();
   p.x = clamp(p.x, r, w - r);
   p.y = clamp(p.y, r, h - r);
+
+  // obstacles
+  for (const ob of state.obstacles) {
+    const hit = resolveCircleRect(p.x, p.y, r, ob);
+    if (!hit) continue;
+    p.x += hit.nx * hit.push;
+    p.y += hit.ny * hit.push;
+    // damp velocity when scraping
+    const vn = p.vx * hit.nx + p.vy * hit.ny;
+    if (vn < 0) {
+      p.vx -= vn * hit.nx;
+      p.vy -= vn * hit.ny;
+      p.vx *= 0.92;
+      p.vy *= 0.92;
+    }
+  }
 }
 
 function ballBounds(b) {
@@ -253,6 +298,21 @@ function ballBounds(b) {
   if (b.x > w - r) { b.x = w - r; b.vx *= -0.72; }
   if (b.y < r) { b.y = r; b.vy *= -0.72; }
   if (b.y > h - r) { b.y = h - r; b.vy *= -0.72; }
+
+  // bounce off obstacles
+  for (const ob of state.obstacles) {
+    const hit = resolveCircleRect(b.x, b.y, r, ob);
+    if (!hit) continue;
+    b.x += hit.nx * hit.push;
+    b.y += hit.ny * hit.push;
+    const vn = b.vx * hit.nx + b.vy * hit.ny;
+    if (vn < 0) {
+      b.vx -= 1.65 * vn * hit.nx;
+      b.vy -= 1.65 * vn * hit.ny;
+      b.vx *= 0.88;
+      b.vy *= 0.88;
+    }
+  }
 }
 
 function releaseThrow(thrower, aimX, aimY, charge01) {
@@ -295,9 +355,17 @@ function botThrow(bot, target, charge01) {
 function update(dt) {
   const now = performance.now();
 
-  // accumulate furry time
+  // accumulate furry time + proximity points
+  const it = currentIt();
   for (const p of state.players) {
     if (p.it) p.furryMs += dt * 1000;
+    else if (it) {
+      const d = vecLen(p.x - it.x, p.y - it.y);
+      const closeness01 = clamp(1 - (d / PROX_MAX_DIST), 0, 1);
+      // reward near-danger time; taper nonlinearly so "very close" is meaningfully better
+      const pts = PROX_POINTS_PER_SEC * (closeness01 ** 1.6) * dt;
+      p.proxPoints += pts;
+    }
   }
 
   // movement
@@ -309,7 +377,6 @@ function update(dt) {
 
   // ball follow/physics
   const b = state.ball;
-  const it = currentIt();
 
   // Invariants: only the current "it" can hold the ball.
   if (it && b.heldBy && b.heldBy !== it.id) {
@@ -390,6 +457,17 @@ function draw() {
   }
 
   const it = currentIt();
+
+  // obstacles
+  for (const ob of state.obstacles) {
+    ctx.fillStyle = 'rgba(255,255,255,.05)';
+    ctx.strokeStyle = 'rgba(255,255,255,.10)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(ob.x, ob.y, ob.w, ob.h, 10);
+    ctx.fill();
+    ctx.stroke();
+  }
 
   // aim indicator for human when it
   const me = state.players.find(p => p.human);
@@ -478,11 +556,12 @@ function draw() {
 
   const scoreEl = document.querySelector('#score');
   const sorted = [...state.players].sort((a,b) => a.furryMs - b.furryMs);
-  scoreEl.innerHTML = `<b>Least furry time wins</b><br>` + sorted.map(p => {
+  scoreEl.innerHTML = `<b>Least furry time wins</b><br><span style="color:rgba(255,255,255,.7)">(+ proximity points when not it)</span><br>` + sorted.map(p => {
     const s = (p.furryMs/1000).toFixed(1);
+    const pts = Math.floor(p.proxPoints);
     const tag = p.it ? ' <span style="color:#f59e0b">(it)</span>' : '';
     const you = p.human ? ' <span style="color:#22c55e">(you)</span>' : '';
-    return `${p.name}: ${s}s${you}${tag}`;
+    return `${p.name}: ${s}s · ${pts}pts${you}${tag}`;
   }).join('<br>');
 }
 
