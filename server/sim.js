@@ -656,7 +656,6 @@ export function createWorld(opts = {}) {
         aimX: p.aimX,
         aimY: p.aimY,
         disconnected: !!p.disconnectedAt,
-        lastSeq: p.input?.seq || 0,
       })),
     };
   }

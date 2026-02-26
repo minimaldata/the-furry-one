@@ -931,12 +931,6 @@ let ws = null;
 let inputSeq = 0;
 let inputTimer = null;
 
-// Client-side prediction (for your own player) to make online feel responsive
-const pendingInputs = []; // {seq,t,up,dn,lf,rt}
-let predictedMe = null; // {x,y,vx,vy}
-let lastServerSeq = 0;
-let lastInputT = null;
-
 // Inactivity kick
 const INACTIVITY_KICK_MS = 5000;
 state.lastMoveAtMs = performance.now();
@@ -987,12 +981,6 @@ function connectOnline() {
       state.wsReady = true;
       state.playerId = msg.playerId;
       localStorage.setItem('tfo_playerId', msg.playerId);
-      // reset prediction
-      pendingInputs.length = 0;
-      predictedMe = null;
-      lastServerSeq = 0;
-      lastInputT = null;
-
       applyServerState(msg.state);
       startInputLoop();
       return;
@@ -1038,17 +1026,6 @@ function applyServerState(s) {
   state.obstacles = snap.obstacles;
   state.over = snap.over;
   state.winnerId = snap.winnerId;
-
-  // reconcile local prediction using authoritative player + acked seq
-  const myId = state.playerId;
-  if (myId && snap.players?.length) {
-    const me = snap.players.find(p => p.id === myId);
-    if (me) {
-      // stash nowMs for reconciliation math (optional)
-      me.nowMs = snap.nowMs;
-      reconcileFromServer(me);
-    }
-  }
 }
 
 function lerpObj(a, b, t) {
@@ -1059,54 +1036,6 @@ function lerpObj(a, b, t) {
     if (typeof a[k] === 'number' && typeof b[k] === 'number') out[k] = lerp(a[k], b[k], t);
   }
   return out;
-}
-
-function stepPredictedMe(dt, input) {
-  if (!predictedMe) return;
-  let ax = 0, ay = 0;
-  if (input.up) ay -= 1;
-  if (input.dn) ay += 1;
-  if (input.lf) ax -= 1;
-  if (input.rt) ax += 1;
-  const [nx, ny] = vecNorm(ax, ay);
-
-  const speed = 1080;
-  predictedMe.vx = lerp(predictedMe.vx, nx * speed, 1 - Math.pow(0.001, dt));
-  predictedMe.vy = lerp(predictedMe.vy, ny * speed, 1 - Math.pow(0.001, dt));
-
-  predictedMe.x += predictedMe.vx * dt;
-  predictedMe.y += predictedMe.vy * dt;
-  predictedMe.vx *= Math.pow(FRICTION, dt * 60);
-  predictedMe.vy *= Math.pow(FRICTION, dt * 60);
-
-  // bounds only (ignore obstacles for now; server will correct)
-  predictedMe.x = clamp(predictedMe.x, PLAYER_RADIUS, ARENA_W - PLAYER_RADIUS);
-  predictedMe.y = clamp(predictedMe.y, PLAYER_RADIUS, ARENA_H - PLAYER_RADIUS);
-}
-
-function reconcileFromServer(serverPlayer) {
-  if (!serverPlayer) return;
-  const serverSeq = serverPlayer.lastSeq || 0;
-  lastServerSeq = Math.max(lastServerSeq, serverSeq);
-
-  // reset prediction to authoritative state
-  predictedMe = {
-    x: serverPlayer.x,
-    y: serverPlayer.y,
-    vx: serverPlayer.vx || 0,
-    vy: serverPlayer.vy || 0,
-  };
-
-  // drop acked inputs
-  while (pendingInputs.length && pendingInputs[0].seq <= serverSeq) pendingInputs.shift();
-
-  // replay remaining inputs
-  for (let i = 0; i < pendingInputs.length; i++) {
-    const cur = pendingInputs[i];
-    const prevT = (i === 0) ? (cur.t - 20) : pendingInputs[i - 1].t;
-    const dt = clamp((cur.t - prevT) / 1000, 0, 0.05);
-    stepPredictedMe(dt || 0.02, cur);
-  }
 }
 
 function getRenderSnapshot() {
@@ -1165,32 +1094,11 @@ function getRenderSnapshot() {
   const mapB = new Map((b.players || []).map(p => [p.id, p]));
   const ids = new Set([...mapA.keys(), ...mapB.keys()]);
   const players = [];
-  const myId = state.playerId;
-
   for (const id of ids) {
     const pa = mapA.get(id);
     const pb = mapB.get(id);
-
-    // Use predicted local player if available
-    if (myId && id === myId && predictedMe) {
-      const src = pb || pa || {};
-      const p = { ...src, ...predictedMe };
-      p.id = src.id;
-      p.name = src.name;
-      p.human = src.human;
-      p.it = src.it;
-      p.score = src.score;
-      p.furryMs = src.furryMs;
-      p.aiming = src.aiming;
-      p.aimCharge = src.aimCharge;
-      p.aimX = src.aimX;
-      p.aimY = src.aimY;
-      p.disconnected = src.disconnected;
-      players.push(p);
-      continue;
-    }
-
     const p = lerpObj(pa, pb, t);
+    // keep discrete fields from newer snapshot
     const src = pb || pa || {};
     p.id = src.id;
     p.name = src.name;
@@ -1222,25 +1130,12 @@ function buildInput() {
   const rt = keys.has('ArrowRight') || keys.has('d') || keys.has('D');
   const spaceDown = keys.has(' ');
 
-  const t = performance.now();
-  if (up || dn || lf || rt) state.lastMoveAtMs = t;
-
-  const seq = ++inputSeq;
-
-  // prediction bookkeeping
-  if (state.mode === 'online' && state.wsReady) {
-    pendingInputs.push({ seq, t, up, dn, lf, rt });
-    if (!predictedMe) predictedMe = { x: ARENA_W/2, y: ARENA_H/2, vx: 0, vy: 0 };
-
-    const dt = lastInputT ? clamp((t - lastInputT) / 1000, 0, 0.05) : 0.02;
-    lastInputT = t;
-    stepPredictedMe(dt, { up, dn, lf, rt });
-  }
+  if (up || dn || lf || rt) state.lastMoveAtMs = performance.now();
 
   return {
     type: 'input',
-    seq,
-    clientTime: t,
+    seq: ++inputSeq,
+    clientTime: performance.now(),
     up, dn, lf, rt,
     mouseX: mouse.x,
     mouseY: mouse.y,
