@@ -22,6 +22,15 @@ function vecNorm(x, y) {
   const L = Math.hypot(x, y) || 1;
   return [x / L, y / L];
 }
+function escapeHtml(v) {
+  return String(v ?? '').replace(/[&<>"']/g, (ch) => (
+    ch === '&' ? '&amp;'
+    : ch === '<' ? '&lt;'
+    : ch === '>' ? '&gt;'
+    : ch === '"' ? '&quot;'
+    : '&#39;'
+  ));
+}
 
 // Shared constants (keep in sync with server/sim.js)
 const ARENA_W = 1200;
@@ -29,19 +38,76 @@ const ARENA_H = 720;
 
 const PLAYER_RADIUS = 14;
 const BALL_RADIUS = 9;
-const MAX_THROW_SPEED = 820;
-const MIN_THROW_SPEED = 220;
-const CHARGE_MS = 900;
+const MAX_THROW_SPEED = 1060;
+const MIN_THROW_SPEED = 320;
+const CHARGE_MS = 620;
 const FRICTION = 0.90;
 const BALL_FRICTION = 0.992;
 const BOT_COUNT = 14;
 const HIT_COOLDOWN_MS = 450;
 const TOUCH_TAG_COOLDOWN_MS = 650;
+const IT_PICKUP_RADIUS = PLAYER_RADIUS + BALL_RADIUS + 8;
 
 const WIN_POINTS = 100;
 const PROX_MAX_DIST = 260;
 const PROX_POINTS_PER_SEC = 16;
 const IT_BLEED_POINTS_PER_SEC = 6;
+
+const BOT_STATES = {
+  FARM_IT: 'FARM_IT',
+  EVADE_IT: 'EVADE_IT',
+  AVOID_LOOSE_BALL: 'AVOID_LOOSE_BALL',
+  CONTEST_BALL: 'CONTEST_BALL',
+  DODGE_THROW: 'DODGE_THROW',
+  PANIC: 'PANIC',
+  IT_TAG_RUSH: 'IT_TAG_RUSH',
+  IT_HUNT: 'IT_HUNT',
+  IT_CHASE_BALL: 'IT_CHASE_BALL',
+  IT_WINDUP: 'IT_WINDUP',
+};
+
+const BOT_STATE_COLORS = {
+  [BOT_STATES.FARM_IT]: '#14b8a6',
+  [BOT_STATES.EVADE_IT]: '#eab308',
+  [BOT_STATES.AVOID_LOOSE_BALL]: '#38bdf8',
+  [BOT_STATES.CONTEST_BALL]: '#a78bfa',
+  [BOT_STATES.DODGE_THROW]: '#fb7185',
+  [BOT_STATES.PANIC]: '#f43f5e',
+  [BOT_STATES.IT_TAG_RUSH]: '#fb923c',
+  [BOT_STATES.IT_HUNT]: '#ef4444',
+  [BOT_STATES.IT_CHASE_BALL]: '#60a5fa',
+  [BOT_STATES.IT_WINDUP]: '#f97316',
+};
+
+const DEV_COLOR_MODES = {
+  NONE: 'none',
+  STATE: 'state',
+  TARGETED: 'targeted',
+  PANIC: 'panic',
+  BOLDNESS: 'boldness',
+  CONFIDENCE: 'confidence',
+};
+
+const DEV_COLOR_OPTIONS = [
+  { value: DEV_COLOR_MODES.NONE, label: 'none' },
+  { value: DEV_COLOR_MODES.STATE, label: 'active state' },
+  { value: DEV_COLOR_MODES.TARGETED, label: 'targeted' },
+  { value: DEV_COLOR_MODES.PANIC, label: 'panic level' },
+  { value: DEV_COLOR_MODES.BOLDNESS, label: 'boldness' },
+  { value: DEV_COLOR_MODES.CONFIDENCE, label: 'confidence' },
+];
+
+const IT_TRANSFER_RULES = {
+  HYBRID: 'hybrid',
+  THROW_ONLY: 'throw-only',
+  TAG_ONLY: 'tag-only',
+};
+
+const IT_TRANSFER_OPTIONS = [
+  { value: IT_TRANSFER_RULES.HYBRID, label: 'hybrid' },
+  { value: IT_TRANSFER_RULES.THROW_ONLY, label: 'always throw' },
+  { value: IT_TRANSFER_RULES.TAG_ONLY, label: 'always tag' },
+];
 
 const COLORS = {
   arena: '#0a0d14',
@@ -60,7 +126,7 @@ app.innerHTML = `
   <div class="top">
     <div class="brand">
       <div class="title">The Furry One</div>
-      <div class="subtitle">Move: WASD/Arrows · Aim: mouse · Throw (when IT): hold mouse or Space, release</div>
+      <div class="subtitle">Move: WASD/Arrows · Aim by movement · Throw (when IT): hold Space, release</div>
     </div>
     <div class="hud">
       <div class="pill" id="status">Loading…</div>
@@ -69,7 +135,10 @@ app.innerHTML = `
       <button class="btn" id="reset">Reset</button>
     </div>
   </div>
-  <div class="canvasWrap"><canvas id="c"></canvas></div>
+  <div class="canvasWrap">
+    <canvas id="c"></canvas>
+    <div class="leaderboard" id="leaderboard"></div>
+  </div>
 
   <div class="overlay" id="overlay">
     <div class="modal">
@@ -88,6 +157,28 @@ app.innerHTML = `
 
 const canvas = document.querySelector('#c');
 const ctx = canvas.getContext('2d');
+const leaderboardEl = document.querySelector('#leaderboard');
+let leaderboardSig = '';
+let leaderboardRowsEl = null;
+let leaderboardDevSelectEl = null;
+let leaderboardRuleSelectEl = null;
+if (leaderboardEl) {
+  leaderboardEl.addEventListener('change', (e) => {
+    const t = e.target;
+    if (!t) return;
+    if (t.id === 'devColorMode') {
+      const next = String(t.value || DEV_COLOR_MODES.NONE);
+      const ok = DEV_COLOR_OPTIONS.some(o => o.value === next);
+      state.devColorMode = ok ? next : DEV_COLOR_MODES.NONE;
+      return;
+    }
+    if (t.id === 'itTransferRule') {
+      const next = String(t.value || IT_TRANSFER_RULES.HYBRID);
+      const ok = IT_TRANSFER_OPTIONS.some(o => o.value === next);
+      state.itTransferRule = ok ? next : IT_TRANSFER_RULES.HYBRID;
+    }
+  });
+}
 
 const view = { scale: 1, offX: 0, offY: 0 };
 
@@ -118,6 +209,77 @@ function screenToWorld(sx, sy) {
   };
 }
 
+function ensureLeaderboardUi() {
+  if (!leaderboardEl) return false;
+  if (leaderboardRowsEl && leaderboardDevSelectEl && leaderboardRuleSelectEl) {
+    if (leaderboardDevSelectEl.value !== state.devColorMode) leaderboardDevSelectEl.value = state.devColorMode;
+    if (leaderboardRuleSelectEl.value !== state.itTransferRule) leaderboardRuleSelectEl.value = state.itTransferRule;
+    return true;
+  }
+
+  const devOptions = DEV_COLOR_OPTIONS.map((o) => (
+    `<option value="${o.value}"${state.devColorMode === o.value ? ' selected' : ''}>${o.label}</option>`
+  )).join('');
+  const ruleOptions = IT_TRANSFER_OPTIONS.map((o) => (
+    `<option value="${o.value}"${state.itTransferRule === o.value ? ' selected' : ''}>${o.label}</option>`
+  )).join('');
+
+  leaderboardEl.innerHTML = `
+    <div class="leaderTitle">Leaderboard</div>
+    <div class="leaderRows" id="leaderRows"></div>
+    <div class="leaderDev">
+      <label class="leaderDevLabel" for="devColorMode">Dev Mode</label>
+      <select id="devColorMode" class="leaderSelect">${devOptions}</select>
+    </div>
+    <div class="leaderDev">
+      <label class="leaderDevLabel" for="itTransferRule">IT Rule</label>
+      <select id="itTransferRule" class="leaderSelect">${ruleOptions}</select>
+    </div>
+  `;
+  leaderboardRowsEl = leaderboardEl.querySelector('#leaderRows');
+  leaderboardDevSelectEl = leaderboardEl.querySelector('#devColorMode');
+  leaderboardRuleSelectEl = leaderboardEl.querySelector('#itTransferRule');
+  return !!leaderboardRowsEl;
+}
+
+function updateLeaderboard(players, myId) {
+  if (!ensureLeaderboardUi()) return;
+  const sorted = [...players].sort((a,b) => (b.score || 0) - (a.score || 0));
+  const sig = sorted.map((p, i) => `${i}:${p.id}:${(p.score || 0).toFixed(0)}:${p.it ? 1 : 0}:${p.id === myId ? 1 : 0}`).join('|');
+  if (sig !== leaderboardSig) {
+    leaderboardSig = sig;
+    leaderboardRowsEl.innerHTML = sorted.map((p, i) => {
+      const isMe = p.id === myId;
+      const itTag = p.it ? ' <span class="itTag">IT</span>' : '';
+      const youTag = isMe ? ' <span class="youTag">YOU</span>' : '';
+      return `<div class="leaderRow${isMe ? ' me' : ''}">
+        <div class="leaderLeft">
+          <span class="leaderRank">${i + 1}.</span>
+          <span class="leaderName">${escapeHtml(p.name)}${youTag}${itTag}</span>
+        </div>
+        <div class="leaderScore">${(p.score || 0).toFixed(0)}</div>
+      </div>`;
+    }).join('');
+  }
+  if (leaderboardDevSelectEl && leaderboardDevSelectEl.value !== state.devColorMode) leaderboardDevSelectEl.value = state.devColorMode;
+  if (leaderboardRuleSelectEl && leaderboardRuleSelectEl.value !== state.itTransferRule) leaderboardRuleSelectEl.value = state.itTransferRule;
+
+  const me = players.find(p => p.id === myId);
+  if (!me) {
+    leaderboardEl.classList.remove('occluded');
+    return;
+  }
+
+  const lb = leaderboardEl.getBoundingClientRect();
+  if (lb.width <= 0 || lb.height <= 0) return;
+  const c = canvas.getBoundingClientRect();
+  const meX = c.left + view.offX + me.x * view.scale;
+  const meY = c.top + view.offY + me.y * view.scale;
+  const pad = 14;
+  const occluded = meX >= (lb.left - pad) && meX <= (lb.right + pad) && meY >= (lb.top - pad) && meY <= (lb.bottom + pad);
+  leaderboardEl.classList.toggle('occluded', occluded);
+}
+
 // Input
 const keys = new Set();
 window.addEventListener('keydown', (e) => {
@@ -140,8 +302,8 @@ window.addEventListener('mouseup', () => { mouse.down = false; });
 
 function clearKeys() {
   keys.clear();
-  state.wasMouseDown = false;
   state.wasSpaceDown = false;
+  state.spaceDownAt = 0;
 }
 window.addEventListener('blur', clearKeys);
 document.addEventListener('visibilitychange', () => { if (document.hidden) clearKeys(); });
@@ -159,6 +321,7 @@ function makePlayer(id, name, isHuman = false) {
     vx: 0,
     vy: 0,
     it: false,
+    itStartAt: -1e9,
     furryMs: 0,
     score: 0,
     lastHitAt: -1e9,
@@ -169,6 +332,25 @@ function makePlayer(id, name, isHuman = false) {
     aimX: 0,
     aimY: 0,
     throwPlan: null,
+    faceX: 1,
+    faceY: 0,
+    botState: isHuman ? null : BOT_STATES.FARM_IT,
+    botStateSince: 0,
+    botBoldBase: isHuman ? 0 : (0.35 + 0.60 * rand01()),
+    botBoldPhase: isHuman ? 0 : (rand01() * TAU),
+    botBoldTempoMs: isHuman ? 0 : (800 + rand01() * 2200),
+    botStuckMs: 0,
+    botPanicUntil: 0,
+    botPanicRetargetAt: 0,
+    botPanicDirX: 1,
+    botPanicDirY: 0,
+    botOrbitSign: isHuman ? 0 : (rand01() < 0.5 ? -1 : 1),
+    botPerceptionLagMs: isHuman ? 0 : (95 + rand01() * 75),
+    botPerception: isHuman ? null : {},
+    botITTargetId: null,
+    botITTargetSince: 0,
+    botITRetargetAt: 0,
+    botThrowConfidence: 0,
   };
 }
 
@@ -180,11 +362,15 @@ const state = {
   online: false,
   wsReady: false,
   playerId: null,
+  devColorMode: DEV_COLOR_MODES.NONE,
+  itTransferRule: IT_TRANSFER_RULES.HYBRID,
 
   players: [],
   obstacles: [],
   ball: null,
-  wasMouseDown: false,
+  itHasBall: false,
+  itLostBallAtMs: 0,
+  itBalllessMs: 0,
   wasSpaceDown: false,
   spaceDownAt: 0,
 
@@ -194,11 +380,38 @@ const state = {
 
 function currentIt() { return state.players.find(p => p.it); }
 
+function refreshItBallTracking(nowMs) {
+  const it = currentIt();
+  const hasBallNow = !!(it && state.ball && state.ball.heldBy === it.id);
+  if (hasBallNow !== state.itHasBall) {
+    state.itHasBall = hasBallNow;
+    if (!hasBallNow) state.itLostBallAtMs = nowMs;
+  }
+  state.itBalllessMs = hasBallNow ? 0 : Math.max(0, nowMs - (state.itLostBallAtMs || nowMs));
+  return hasBallNow;
+}
+
+function canItTagTransfer() {
+  return state.itTransferRule !== IT_TRANSFER_RULES.THROW_ONLY;
+}
+
+function canItThrowTransfer() {
+  return state.itTransferRule !== IT_TRANSFER_RULES.TAG_ONLY;
+}
+
 function setIt(playerId) {
-  for (const p of state.players) p.it = (p.id === playerId);
+  const now = state.nowMs;
+  for (const p of state.players) {
+    const next = (p.id === playerId);
+    p.it = next;
+    p.itStartAt = next ? now : -1e9;
+  }
   state.ball.heldBy = playerId;
   state.ball.vx = 0;
   state.ball.vy = 0;
+  state.itHasBall = true;
+  state.itLostBallAtMs = now;
+  state.itBalllessMs = 0;
 }
 
 function resetGameOffline() {
@@ -215,7 +428,12 @@ function resetGameOffline() {
     { x: ARENA_W*0.82 - 44, y: ARENA_H*0.70 - 28, w: 88, h: 56 },
   ];
 
-  state.players[Math.floor(rand01() * state.players.length)].it = true;
+  const itIdx = Math.floor(rand01() * state.players.length);
+  for (let i = 0; i < state.players.length; i++) {
+    const isIt = (i === itIdx);
+    state.players[i].it = isIt;
+    state.players[i].itStartAt = isIt ? state.nowMs : -1e9;
+  }
   state.over = false;
   state.winnerId = null;
 
@@ -230,7 +448,10 @@ function resetGameOffline() {
     thrownAt: -1e9,
   };
 
-  state.wasMouseDown = false;
+  state.itHasBall = true;
+  state.itLostBallAtMs = state.nowMs;
+  state.itBalllessMs = 0;
+
   state.wasSpaceDown = false;
   state.spaceDownAt = 0;
 
@@ -240,6 +461,19 @@ function resetGameOffline() {
     p.aimX = p.x;
     p.aimY = p.y;
     p.throwPlan = null;
+    if (!p.human) {
+      p.botState = BOT_STATES.FARM_IT;
+      p.botStateSince = state.nowMs;
+      p.botStuckMs = 0;
+      p.botPanicUntil = 0;
+      p.botPanicRetargetAt = 0;
+      p.botPanicDirX = p.faceX || 1;
+      p.botPanicDirY = p.faceY || 0;
+      p.botPerception = {};
+      p.botITTargetId = null;
+      p.botITTargetSince = 0;
+      p.botITRetargetAt = 0;
+    }
   }
 }
 
@@ -281,6 +515,255 @@ function hasClearThrow(fromX, fromY, toX, toY) {
   return true;
 }
 
+function setBotState(p, nextState) {
+  if (p.botState === nextState) return;
+  p.botState = nextState;
+  p.botStateSince = state.nowMs;
+}
+
+function throwSpeedForCharge(charge01) {
+  const c = clamp(charge01 || 0, 0, 1);
+  const shaped = Math.pow(c, 0.74);
+  return lerp(MIN_THROW_SPEED, MAX_THROW_SPEED, shaped);
+}
+
+function moveToward(p, dt, tx, ty, speed = 820, snap = 0.01) {
+  const dx = tx - p.x;
+  const dy = ty - p.y;
+  const [nx, ny] = vecNorm(dx, dy);
+  p.vx = lerp(p.vx, nx * speed, 1 - Math.pow(snap, dt));
+  p.vy = lerp(p.vy, ny * speed, 1 - Math.pow(snap, dt));
+
+  p.x += p.vx * dt;
+  p.y += p.vy * dt;
+  p.vx *= Math.pow(FRICTION, dt*60);
+  p.vy *= Math.pow(FRICTION, dt*60);
+  const sp = vecLen(p.vx, p.vy);
+  if (sp > 30) {
+    p.faceX = p.vx / sp;
+    p.faceY = p.vy / sp;
+  }
+}
+
+function isBallThreatening(p, b) {
+  if (!b || b.heldBy || !b.armed) return false;
+  const speed = vecLen(b.vx, b.vy);
+  if (speed < 180) return false;
+
+  const toPX = p.x - b.x;
+  const toPY = p.y - b.y;
+  const along = (toPX * b.vx + toPY * b.vy) / speed;
+  if (along <= 0 || along > 520) return false;
+
+  const lateral = Math.abs(toPX * (-b.vy / speed) + toPY * (b.vx / speed));
+  return lateral < (PLAYER_RADIUS + BALL_RADIUS + 18);
+}
+
+function getBotBoldness(p, nowMs) {
+  const base = clamp(Number(p.botBoldBase ?? 0.55), 0.08, 1);
+  const phase = Number(p.botBoldPhase || 0);
+  const tempo = Math.max(300, Number(p.botBoldTempoMs || 1400));
+  const wave = Math.sin(nowMs / tempo + phase);
+  const pulse = Math.sin(nowMs / (tempo * 0.53) + phase * 1.7);
+  return clamp(base + wave * 0.18 + pulse * 0.08, 0.08, 1);
+}
+
+function getEndgameBoldnessBoost(p, players) {
+  if (!Array.isArray(players) || players.length === 0) return 0;
+  const bestScoreNow = Math.max(...players.map(x => x.score || 0));
+  const lead01 = clamp(bestScoreNow / WIN_POINTS, 0, 1);
+  const endgame01 = clamp((lead01 - 0.72) / 0.28, 0, 1);
+  const ramp = endgame01 ** 1.55;
+  const isLeader = (p.score || 0) >= (bestScoreNow - 0.01);
+  const everybodyBoost = 0.14 * ramp;
+  const chaseBoost = (isLeader ? 0.05 : 0.22) * ramp;
+  return everybodyBoost + chaseBoost;
+}
+
+function getBotEffectiveBoldness(p, nowMs, players) {
+  const base = getBotBoldness(p, nowMs);
+  return clamp(base + getEndgameBoldnessBoost(p, players), 0.08, 1);
+}
+
+function getPerceivedTarget(bot, target, nowMs, lagMs) {
+  if (!bot.botPerception) bot.botPerception = {};
+  const k = String(target.id);
+  const p = bot.botPerception[k];
+  const intervalMs = Math.max(60, lagMs * (0.85 + 0.35 * rand01()));
+
+  if (!p || nowMs >= p.nextRefreshAt) {
+    const vel01 = clamp(vecLen(target.vx, target.vy) / 1050, 0, 1);
+    const noisePx = 2 + 7 * vel01;
+    bot.botPerception[k] = {
+      x: target.x + randN() * noisePx,
+      y: target.y + randN() * noisePx,
+      vx: target.vx,
+      vy: target.vy,
+      score: target.score || 0,
+      nextRefreshAt: nowMs + intervalMs,
+    };
+  }
+
+  const s = bot.botPerception[k];
+  return {
+    id: target.id,
+    name: target.name,
+    score: s.score || 0,
+    x: clamp(s.x, 0, ARENA_W),
+    y: clamp(s.y, 0, ARENA_H),
+    vx: s.vx || 0,
+    vy: s.vy || 0,
+  };
+}
+
+function getForwardDir(p) {
+  const sp = vecLen(p.vx, p.vy);
+  if (sp > 40) return [p.vx / sp, p.vy / sp];
+  const fx = Number(p.faceX ?? 1);
+  const fy = Number(p.faceY ?? 0);
+  const fsp = vecLen(fx, fy);
+  if (fsp > 0.01) return [fx / fsp, fy / fsp];
+  return [1, 0];
+}
+
+function targetCluster01(target, nearbyTargets) {
+  if (!target || !Array.isArray(nearbyTargets) || nearbyTargets.length < 2) return 0;
+  let mass = 0;
+  for (const q of nearbyTargets) {
+    if (!q || q.id === target.id) continue;
+    const d = vecLen((q.x || 0) - (target.x || 0), (q.y || 0) - (target.y || 0));
+    if (d > 250) continue;
+    mass += clamp(1 - d / 250, 0, 1);
+  }
+  return clamp(mass / 2.2, 0, 1);
+}
+
+function estimateThrowConfidence(thrower, target, charge01, nearbyTargets = null) {
+  if (!thrower || !target) return 0;
+  const charge = clamp(charge01 || 0, 0, 1);
+  const [fx, fy] = getForwardDir(thrower);
+  const speed = throwSpeedForCharge(charge);
+
+  const dx0 = target.x - thrower.x;
+  const dy0 = target.y - thrower.y;
+  const along0 = dx0 * fx + dy0 * fy;
+  if (along0 <= 0) return 0.02;
+
+  const t = clamp(along0 / Math.max(220, speed), 0, 0.9);
+  const px = target.x + (target.vx || 0) * t;
+  const py = target.y + (target.vy || 0) * t;
+
+  const dx = px - thrower.x;
+  const dy = py - thrower.y;
+  const dist = vecLen(dx, dy);
+  if (dist > 1200) return 0.01;
+
+  const along = dx * fx + dy * fy;
+  if (along <= 0) return 0.02;
+
+  const lateral = Math.abs(dx * (-fy) + dy * fx);
+  const cos01 = clamp((along / (dist || 1) + 1) * 0.5, 0, 1);
+  const speed01 = clamp((speed - MIN_THROW_SPEED) / (MAX_THROW_SPEED - MIN_THROW_SPEED), 0, 1);
+  const laneHalf = PLAYER_RADIUS + BALL_RADIUS + 22 + 60 * (1 - charge) + 8 * speed01;
+  const lane01 = clamp(1 - (lateral / laneHalf), 0, 1);
+  const range01 = clamp(1 - dist / 1180, 0, 1);
+  const los01 = hasClearThrow(thrower.x, thrower.y, px, py) ? 1 : 0.20;
+
+  const targetLatV = Math.abs((target.vx || 0) * (-fy) + (target.vy || 0) * fx);
+  const motion01 = clamp(1 - targetLatV / 900, 0, 1);
+
+  const base = (cos01 ** 1.28) * (lane01 ** 1.04) * (0.36 + 0.64 * range01) * los01 * (0.58 + 0.42 * motion01) * (0.84 + 0.16 * speed01);
+
+  let clusterBonus = 0;
+  let isolationPenalty = 0;
+  if (Array.isArray(nearbyTargets) && nearbyTargets.length > 1) {
+    let clusterMass = 0;
+    for (const q of nearbyTargets) {
+      if (!q || q.id === target.id) continue;
+      const qx = (q.x || 0) + (q.vx || 0) * t;
+      const qy = (q.y || 0) + (q.vy || 0) * t;
+      const qdx = qx - thrower.x;
+      const qdy = qy - thrower.y;
+      const qalong = qdx * fx + qdy * fy;
+      if (qalong < along * 0.55 || qalong > along + 220) continue;
+      const spread = vecLen(qx - px, qy - py);
+      if (spread > 220) continue;
+      clusterMass += clamp(1 - spread / 220, 0, 1);
+    }
+    const density01 = clamp(clusterMass / 2.0, 0, 1);
+    clusterBonus = 0.38 * density01 * (0.62 + 0.38 * lane01);
+    const isolated01 = 1 - density01;
+    isolationPenalty = 0.16 * isolated01 * range01 * (0.58 + 0.42 * (1 - lane01));
+  }
+
+  return clamp(base + clusterBonus - isolationPenalty, 0, 1);
+}
+
+function choosePanicDir(p, it) {
+  let wx = 0, wy = 0;
+  if (p.x < 130) wx += 1;
+  if (p.x > ARENA_W - 130) wx -= 1;
+  if (p.y < 110) wy += 1;
+  if (p.y > ARENA_H - 110) wy -= 1;
+
+  let ox = 0, oy = 0;
+  for (const ob of state.obstacles) {
+    const cx = ob.x + ob.w * 0.5;
+    const cy = ob.y + ob.h * 0.5;
+    const dx = p.x - cx;
+    const dy = p.y - cy;
+    const d = vecLen(dx, dy);
+    if (d >= 210) continue;
+    const w = (210 - d) / 210;
+    ox += (dx / (d || 1)) * w;
+    oy += (dy / (d || 1)) * w;
+  }
+
+  const [ix, iy] = vecNorm(p.x - it.x, p.y - it.y);
+  const a = rand01() * TAU;
+  const rx = Math.cos(a);
+  const ry = Math.sin(a);
+  const [nx, ny] = vecNorm(wx * 1.4 + ox * 1.8 + ix * 0.7 + rx * 1.25, wy * 1.4 + oy * 1.8 + iy * 0.7 + ry * 1.25);
+  return [nx, ny];
+}
+
+function getOfflineBotColor(p, it, nowMs) {
+  const mode = state.devColorMode || DEV_COLOR_MODES.NONE;
+  if (mode === DEV_COLOR_MODES.NONE) return COLORS.bot;
+  if (mode === DEV_COLOR_MODES.STATE) return BOT_STATE_COLORS[p.botState] || COLORS.bot;
+
+  if (mode === DEV_COLOR_MODES.TARGETED) {
+    const targetId = it?.botITTargetId || null;
+    if (!targetId) return p.it ? COLORS.it : 'rgba(255,255,255,.60)';
+    if (p.id === targetId) return '#ef4444';
+    if (p.it) return '#f59e0b';
+    return 'rgba(255,255,255,.30)';
+  }
+
+  if (mode === DEV_COLOR_MODES.PANIC) {
+    const panicNow = (p.botPanicUntil && nowMs < p.botPanicUntil) ? 1 : 0;
+    const buildup = clamp((p.botStuckMs || 0) / 340, 0, 1);
+    const panic01 = Math.max(panicNow, buildup);
+    const hue = Math.round(lerp(135, 0, panic01));
+    return `hsl(${hue} 84% 56%)`;
+  }
+
+  if (mode === DEV_COLOR_MODES.BOLDNESS) {
+    const b01 = clamp(getBotEffectiveBoldness(p, nowMs, state.players), 0, 1);
+    const hue = Math.round(lerp(210, 20, b01));
+    return `hsl(${hue} 86% 58%)`;
+  }
+
+  if (mode === DEV_COLOR_MODES.CONFIDENCE) {
+    if (!p.it) return 'rgba(255,255,255,.22)';
+    const c01 = clamp(p.botThrowConfidence || 0, 0, 1);
+    const hue = Math.round(lerp(0, 132, c01));
+    return `hsl(${hue} 88% 56%)`;
+  }
+
+  return COLORS.bot;
+}
+
 function moveHuman(p, dt) {
   let ax = 0, ay = 0;
   const up = keys.has('ArrowUp') || keys.has('w') || keys.has('W');
@@ -293,7 +776,14 @@ function moveHuman(p, dt) {
   if (rt) ax += 1;
   const [nx, ny] = vecNorm(ax, ay);
 
-  const speed = 1080;
+  let speed = 1080;
+  if (p.it) speed *= 0.88;
+  if (p.it && canItThrowTransfer() && state.ball?.heldBy === p.id && keys.has(' ')) {
+    if (state.spaceDownAt <= 0) state.spaceDownAt = state.nowMs;
+    const start = state.spaceDownAt > 0 ? state.spaceDownAt : state.nowMs;
+    const charge01 = clamp((state.nowMs - start) / CHARGE_MS, 0, 1);
+    speed *= lerp(1, 0.60, charge01);
+  }
   p.vx = lerp(p.vx, nx * speed, 1 - Math.pow(0.001, dt));
   p.vy = lerp(p.vy, ny * speed, 1 - Math.pow(0.001, dt));
 
@@ -301,135 +791,432 @@ function moveHuman(p, dt) {
   p.y += p.vy * dt;
   p.vx *= Math.pow(FRICTION, dt*60);
   p.vy *= Math.pow(FRICTION, dt*60);
+  const sp = vecLen(p.vx, p.vy);
+  if (sp > 30) {
+    p.faceX = p.vx / sp;
+    p.faceY = p.vy / sp;
+  }
 }
 
 function moveBot(p, dt) {
   const it = currentIt();
   if (!it) return;
 
+  const now = state.nowMs;
+  const itHasBallNow = refreshItBallTracking(now);
+  const allowTagTransfer = canItTagTransfer();
+  const allowThrowTransfer = canItThrowTransfer();
+  const b = state.ball;
   const targets = state.players.filter(q => q.id !== p.id);
+  const bestScoreNow = Math.max(...state.players.map(x => x.score || 0));
+  const behind01 = clamp((bestScoreNow - (p.score || 0)) / WIN_POINTS, 0, 1);
+  const boldness = getBotEffectiveBoldness(p, now, state.players);
+  const ballless01 = clamp((state.itBalllessMs || 0) / 900, 0, 1);
+  const possessionBold = itHasBallNow
+    ? (p.it ? -0.02 : -0.06)
+    : (p.it ? (0.08 + 0.10 * ballless01) : (0.14 + 0.20 * ballless01));
+  const winPush = clamp(boldness + possessionBold + 0.30 * behind01, 0.08, 1);
+  const awarenessLagMs = p.it ? clamp((p.botPerceptionLagMs || 130) * lerp(1.0, 0.78, winPush), 70, 180) : 0;
+  const sensedTargets = p.it
+    ? targets.map(q => getPerceivedTarget(p, q, now, awarenessLagMs))
+    : targets;
 
-  let nearest = targets[0];
+  let nearest = sensedTargets[0];
   let best = 1e9;
-  for (const q of targets) {
+  for (const q of sensedTargets) {
     const d = vecLen(q.x - p.x, q.y - p.y);
     if (d < best) { best = d; nearest = q; }
   }
+  const nearestDist = best;
 
   let throwTarget = nearest;
+  let throwTargetGroup01 = targetCluster01(throwTarget, sensedTargets);
   let throwBest = -1e18;
-  for (const q of targets) {
+  const itDurationMs = p.it ? Math.max(0, now - (p.itStartAt || now)) : 0;
+  const shedUrgency = clamp(itDurationMs / 3200, 0, 1);
+  for (const q of sensedTargets) {
     const d = vecLen(q.x - p.x, q.y - p.y);
     const leader01 = clamp((q.score || 0) / WIN_POINTS, 0, 1);
     const closish01 = clamp(1 - d / 900, 0, 1);
     const los = hasClearThrow(p.x, p.y, q.x, q.y) ? 1 : 0;
-    const s = (2.2 * leader01 + 0.9 * closish01 + 0.4 * rand01()) * (0.25 + 0.75 * los);
+    let losMult = 1;
+    let leaderWeight = 1.6 + 1.6 * winPush;
+    let closeWeight = 1.05 - 0.45 * winPush;
+    let jitterWeight = 0.55 - 0.30 * winPush;
+    let groupWeight = 0;
+    let isolationPenalty = 0;
+    const group01 = targetCluster01(q, sensedTargets);
+
+    if (p.it) {
+      // As IT, urgency rises over time: prioritize any fast handoff instead of tunneling the leader.
+      losMult = los ? 1 : lerp(0.22, 0.60, shedUrgency);
+      leaderWeight = lerp(1.8, 0.70, shedUrgency) + 0.40 * winPush;
+      closeWeight = lerp(0.9, 2.7, shedUrgency) + 0.35 * winPush;
+      jitterWeight = 0.30 + 0.18 * (1 - shedUrgency);
+      groupWeight = lerp(0.95, 1.70, shedUrgency) + 0.35 * winPush;
+      isolationPenalty = (1 - group01) * lerp(0.16, 0.34, shedUrgency);
+    } else {
+      losMult = los ? 1 : lerp(0.10, 0.42, winPush);
+    }
+
+    const s = (leaderWeight * leader01 + closeWeight * closish01 + jitterWeight * rand01() + groupWeight * group01) * losMult - isolationPenalty;
     if (s > throwBest) {
       throwBest = s;
       throwTarget = q;
+      throwTargetGroup01 = group01;
     }
+  }
+
+  if (p.it && shedUrgency > 0.55) {
+    const dBest = vecLen(throwTarget.x - p.x, throwTarget.y - p.y);
+    const dNear = vecLen(nearest.x - p.x, nearest.y - p.y);
+    if (dNear < dBest * 0.86) {
+      throwTarget = nearest;
+      throwTargetGroup01 = targetCluster01(nearest, sensedTargets);
+    }
+  }
+  let focusDist = vecLen(throwTarget.x - p.x, throwTarget.y - p.y);
+  if (p.it) {
+    const byId = new Map(sensedTargets.map(q => [q.id, q]));
+    const current = p.botITTargetId ? byId.get(p.botITTargetId) : null;
+    const shouldRetarget = !current || now >= (p.botITRetargetAt || 0);
+    let chosen = current || throwTarget;
+
+    if (shouldRetarget) {
+      chosen = throwTarget;
+    } else if (throwTarget.id !== current.id) {
+      const dCur = vecLen(current.x - p.x, current.y - p.y);
+      const dCand = vecLen(throwTarget.x - p.x, throwTarget.y - p.y);
+      const leadDiff = (throwTarget.score || 0) - (current.score || 0);
+      if (dCand + 90 < dCur || leadDiff > 12) chosen = throwTarget;
+    }
+
+    if (!p.botITTargetId || !current || chosen.id !== p.botITTargetId) {
+      p.botITTargetSince = now;
+    }
+    p.botITTargetId = chosen.id;
+    p.botITRetargetAt = now + 120 + 160 * rand01();
+    throwTarget = chosen;
+    throwTargetGroup01 = targetCluster01(throwTarget, sensedTargets);
+    focusDist = vecLen(throwTarget.x - p.x, throwTarget.y - p.y);
+  } else {
+    p.botITTargetId = null;
+    p.botITTargetSince = 0;
+    p.botITRetargetAt = 0;
   }
 
   let tx = p.x, ty = p.y;
-  const b = state.ball;
-  if (p.it) {
-    if (b && !b.heldBy) { tx = b.x; ty = b.y; }
-    else { tx = nearest.x; ty = nearest.y; }
+  let speed = 820;
+  let snap = 0.01;
+  const tagRushDist = lerp(72, 130, winPush);
+  let preferTag = false;
+  let throwAggroNow = 0;
+  let shotConfidenceNow = 0;
+  if (p.it && b && b.heldBy === p.id) {
+    if (!allowThrowTransfer) {
+      preferTag = true;
+      p.botThrowConfidence = 0;
+    } else {
+      throwAggroNow = clamp(0.62 * winPush + 0.38 * shedUrgency, 0, 1);
+      const windProgNow = p.throwPlan
+        ? clamp((now - p.throwPlan.startAt) / Math.max(1, p.throwPlan.windupMs || 1), 0, 1)
+        : 0;
+      const releaseChargeNow = p.throwPlan
+        ? clamp((p.throwPlan.targetCharge || 0) * windProgNow, 0.06, 0.98)
+        : clamp(0.20 + 0.36 * throwAggroNow, 0.16, 0.90);
+      shotConfidenceNow = estimateThrowConfidence(p, throwTarget, releaseChargeNow, sensedTargets);
+      p.botThrowConfidence = shotConfidenceNow;
+
+      const expectedWindupMs = lerp(460, 150, throwAggroNow) + 60;
+      const expectedCharge = clamp(0.24 + 0.36 * throwAggroNow, 0.18, 0.98);
+      const expectedThrowSpeed = throwSpeedForCharge(expectedCharge);
+      const throwEtaMs = expectedWindupMs + (focusDist / Math.max(220, expectedThrowSpeed)) * 1000;
+      const tagSpeed = Math.max(360, lerp(900, 1060, winPush) * 0.82);
+      const tagEtaMs = (focusDist / tagSpeed) * 1000;
+      const lowShotConfidence = shotConfidenceNow < lerp(0.62, 0.42, winPush);
+      preferTag = focusDist < tagRushDist && tagEtaMs < throwEtaMs * 0.50 && lowShotConfidence;
+      const focusMsNow = now - (p.botITTargetSince || now);
+      if (focusMsNow > 520 && shotConfidenceNow > 0.30) preferTag = false;
+      if (p.throwPlan) {
+        const windProg = clamp((now - p.throwPlan.startAt) / Math.max(1, p.throwPlan.windupMs || 1), 0, 1);
+        if (windProg > 0.55) preferTag = false;
+      }
+      if (!allowTagTransfer) preferTag = false;
+    }
+  } else if (p.it) {
+    p.botThrowConfidence = 0;
   } else {
-    // Not IT: stay close to IT to farm points.
-    // If IT doesn't have the ball AND the ball is loose/slow, it's a "safe window" to crowd them.
-    const bestScoreNow = Math.max(...state.players.map(x => x.score || 0));
-    const behind01 = clamp((bestScoreNow - (p.score || 0)) / WIN_POINTS, 0, 1);
-    const risk = 0.55 + 0.35 * behind01;
-
-    const itHasBall = (b && b.heldBy === it.id);
+    p.botThrowConfidence = 0;
+  }
+  const itBallLoose = !!(p.it && b && !b.heldBy);
+  let nextState = BOT_STATES.FARM_IT;
+  if (p.it) {
+    if (itBallLoose) {
+      nextState = BOT_STATES.IT_CHASE_BALL;
+      const chaseLeadT = clamp(vecLen(b.vx, b.vy) / 980, 0.06, 0.24);
+      tx = b.x + b.vx * chaseLeadT;
+      ty = b.y + b.vy * chaseLeadT;
+      speed = lerp(1000, 1160, winPush);
+      snap = lerp(0.0046, 0.0018, winPush);
+    } else if (b && b.heldBy === p.id && allowTagTransfer && preferTag) {
+      nextState = BOT_STATES.IT_TAG_RUSH;
+      tx = nearest.x;
+      ty = nearest.y;
+      speed = lerp(900, 1060, winPush);
+      snap = lerp(0.006, 0.0022, winPush);
+    } else if (b && b.heldBy === p.id && allowThrowTransfer && p.throwPlan) {
+      nextState = BOT_STATES.IT_WINDUP;
+      tx = throwTarget.x;
+      ty = throwTarget.y;
+      speed = lerp(520, 700, winPush);
+      snap = lerp(0.03, 0.016, winPush);
+    } else {
+      nextState = BOT_STATES.IT_HUNT;
+      tx = throwTarget.x;
+      ty = throwTarget.y;
+      speed = lerp(760, 960, winPush);
+      snap = lerp(0.016, 0.006, winPush);
+    }
+  } else {
+    const itHasBall = !!itHasBallNow;
+    const ballIsLoose = !!(b && !b.heldBy);
+    const ballSpeed = ballIsLoose ? vecLen(b.vx, b.vy) : 0;
+    const ballIsOpen = ballIsLoose && (!b.armed || ballSpeed < 260);
     const ballIsLooseSlow = (b && !b.heldBy && vecLen(b.vx, b.vy) < 220);
-    const safeWindow = (!itHasBall) && ballIsLooseSlow;
+    const ballLeadT = ballIsLoose ? clamp(ballSpeed / 900, 0.08, 0.28) : 0;
+    const ballLeadX = ballIsLoose ? (b.x + b.vx * ballLeadT) : p.x;
+    const ballLeadY = ballIsLoose ? (b.y + b.vy * ballLeadT) : p.y;
+    const ballLeadDist = ballIsLoose ? vecLen(p.x - ballLeadX, p.y - ballLeadY) : 1e9;
+    const itDist = vecLen(p.x - it.x, p.y - it.y);
+    const dodgeChance = lerp(0.95, 0.45, winPush);
+    const evadeChance = lerp(0.96, 0.42, winPush);
+    const evadeDist = lerp(260, 150, winPush);
+    const contestDist = lerp(280, 560, winPush);
+    const avoidLooseDist = lerp(260, 136, winPush);
+    const avoidOpenBall = ballIsOpen && ballLeadDist < avoidLooseDist;
+    const desperateContest = ballIsLooseSlow && ballLeadDist < contestDist && behind01 > 0.28 && winPush > 0.86 && rand01() < 0.42;
 
-    const SWEET = safeWindow ? 80 : 140;
-    const FAR = safeWindow ? 170 : 280;
-    const desiredDist = lerp(FAR, SWEET, risk);
+    if (isBallThreatening(p, b) && rand01() < dodgeChance) {
+      nextState = BOT_STATES.DODGE_THROW;
+      const speedNow = vecLen(b.vx, b.vy) || 1;
+      const tangentX = -b.vy / speedNow;
+      const tangentY = b.vx / speedNow;
+      const sign = Math.sin(now / 180 + p.id.length) > 0 ? 1 : -1;
+      tx = p.x + tangentX * sign * 190 + (p.x - b.x) * 0.45;
+      ty = p.y + tangentY * sign * 190 + (p.y - b.y) * 0.45;
+      speed = lerp(940, 1080, winPush);
+      snap = lerp(0.004, 0.0022, winPush);
+    } else if (itHasBall && itDist < evadeDist && rand01() < evadeChance) {
+      nextState = BOT_STATES.EVADE_IT;
+      const dxIT = p.x - it.x;
+      const dyIT = p.y - it.y;
+      const [nxIT, nyIT] = vecNorm(dxIT, dyIT);
+      const oxIT = -nyIT;
+      const oyIT = nxIT;
+      const wob = Math.sin(now / 310 + p.id.length * 0.8);
+      const retreat = lerp(250, 180, winPush);
+      const orbit = lerp(130, 95, winPush);
+      tx = p.x + nxIT * retreat + oxIT * wob * orbit;
+      ty = p.y + nyIT * retreat + oyIT * wob * orbit;
+      speed = lerp(860, 980, winPush);
+      snap = lerp(0.006, 0.0035, winPush);
+    } else if (avoidOpenBall && !desperateContest) {
+      nextState = BOT_STATES.AVOID_LOOSE_BALL;
+      const [nbx, nby] = vecNorm(p.x - ballLeadX, p.y - ballLeadY);
+      const ox = -nby;
+      const oy = nbx;
+      const [nix, niy] = vecNorm(p.x - it.x, p.y - it.y);
+      const wob = Math.sin(now / 240 + p.id.length * 1.3);
+      const retreat = lerp(300, 190, winPush);
+      const orbit = lerp(145, 84, winPush) * ((p.botOrbitSign || 1) + 0.28 * wob);
+      tx = p.x + nbx * retreat + ox * orbit + nix * 46;
+      ty = p.y + nby * retreat + oy * orbit + niy * 46;
+      speed = lerp(960, 840, winPush);
+      snap = lerp(0.005, 0.0025, winPush);
+    } else if (ballIsLooseSlow && b && vecLen(p.x - b.x, p.y - b.y) < contestDist) {
+      nextState = BOT_STATES.CONTEST_BALL;
+      const tLead = clamp(vecLen(b.vx, b.vy) / 900, 0.10, lerp(0.22, 0.34, winPush));
+      tx = b.x + b.vx * tLead;
+      ty = b.y + b.vy * tLead;
+      speed = lerp(820, 920, winPush);
+      snap = lerp(0.01, 0.005, winPush);
+    } else {
+      nextState = BOT_STATES.FARM_IT;
+      // Not IT: stay close to IT to farm points.
+      // If IT doesn't have the ball AND the ball is loose/slow, it's a "safe window" to crowd them.
+      const risk = clamp(0.48 + 0.30 * behind01 + 0.28 * winPush, 0.35, 0.98);
+      const safeWindow = (!itHasBall) && ballIsLooseSlow;
 
-    const dxIT = p.x - it.x;
-    const dyIT = p.y - it.y;
-    const dIT = vecLen(dxIT, dyIT) || 1;
-    const nxIT = dxIT / dIT;
-    const nyIT = dyIT / dIT;
-    const oxIT = -nyIT;
-    const oyIT = nxIT;
+      const SWEET = safeWindow ? lerp(110, 62, winPush) : lerp(160, 96, winPush);
+      const FAR = safeWindow ? lerp(200, 130, winPush) : lerp(310, 180, winPush);
+      const braveBias = lerp(1.12, 0.72, winPush);
+      const minStandoff = itHasBall ? lerp(190, 130, winPush) : lerp(130, 88, winPush);
+      const desiredDist = Math.max(minStandoff, lerp(FAR, SWEET, risk) * braveBias);
 
-    const radialSign = (dIT > desiredDist) ? -1 : 1;
-    const wob = Math.sin(state.nowMs/520 + p.id.length) * 0.9;
+      const dxIT = p.x - it.x;
+      const dyIT = p.y - it.y;
+      const dIT = vecLen(dxIT, dyIT) || 1;
+      const nxIT = dxIT / dIT;
+      const nyIT = dyIT / dIT;
+      const oxIT = -nyIT;
+      const oyIT = nxIT;
+      if (itHasBall && dIT < minStandoff * 0.82) {
+        nextState = BOT_STATES.EVADE_IT;
+        const retreat = lerp(240, 180, winPush);
+        const orbit = lerp(135, 92, winPush) * (p.botOrbitSign || 1);
+        tx = p.x + nxIT * retreat + oxIT * orbit;
+        ty = p.y + nyIT * retreat + oyIT * orbit;
+        speed = lerp(900, 1020, winPush);
+        snap = lerp(0.006, 0.003, winPush);
+      } else {
+        const closePress = clamp(1 - dIT / (desiredDist + 1), 0, 1);
+        const radialSign = (dIT > desiredDist * 1.05) ? -1 : 1;
+        const wob = Math.sin(state.nowMs/520 + p.id.length) * 0.75;
+        const orbitSign = p.botOrbitSign || 1;
+        const tangential = orbitSign * (0.55 + 0.65 * closePress);
 
-    let vxGoal = nxIT * radialSign * 1.0 + oxIT * 0.9 * wob;
-    let vyGoal = nyIT * radialSign * 1.0 + oyIT * 0.9 * wob;
+        let vxGoal = nxIT * radialSign * (0.95 + 0.70 * closePress) + oxIT * tangential + oxIT * wob * 0.35;
+        let vyGoal = nyIT * radialSign * (0.95 + 0.70 * closePress) + oyIT * tangential + oyIT * wob * 0.35;
 
-    if (b && !b.heldBy) {
-      const tLead = clamp(vecLen(b.vx, b.vy) / 900, 0.10, 0.30);
-      const bx = b.x + b.vx * tLead;
-      const by = b.y + b.vy * tLead;
-      const dBall = vecLen(p.x - bx, p.y - by);
-      if (dBall < 460) {
-        const [nbx, nby] = vecNorm(p.x - bx, p.y - by);
-        vxGoal += nbx * 1.8;
-        vyGoal += nby * 1.8;
+        if (vecLen(p.vx, p.vy) < 110) {
+          vxGoal += oxIT * orbitSign * 0.9;
+          vyGoal += oyIT * orbitSign * 0.9;
+        }
+
+        if (b && !b.heldBy) {
+          const tLead = clamp(vecLen(b.vx, b.vy) / 900, 0.10, lerp(0.26, 0.34, winPush));
+          const bx = b.x + b.vx * tLead;
+          const by = b.y + b.vy * tLead;
+          const dBall = vecLen(p.x - bx, p.y - by);
+          if (dBall < lerp(380, 520, winPush)) {
+            const [nbx, nby] = vecNorm(p.x - bx, p.y - by);
+            const ballPressure = lerp(1.0, 1.9, winPush);
+            vxGoal += nbx * ballPressure;
+            vyGoal += nby * ballPressure;
+          }
+        }
+
+        const [nx, ny] = vecNorm(vxGoal, vyGoal);
+        const steerLen = lerp(150, 205, closePress);
+        tx = p.x + nx * steerLen;
+        ty = p.y + ny * steerLen;
       }
     }
-
-    const [nx, ny] = vecNorm(vxGoal, vyGoal);
-    tx = p.x + nx * 160;
-    ty = p.y + ny * 160;
   }
 
-  const dx = tx - p.x;
-  const dy = ty - p.y;
-  const [nx, ny] = vecNorm(dx, dy);
-  const speed = 820;
-  p.vx = lerp(p.vx, nx * speed, 1 - Math.pow(0.01, dt));
-  p.vy = lerp(p.vy, ny * speed, 1 - Math.pow(0.01, dt));
+  if (p.it && !itBallLoose) {
+    speed *= 0.90;
+    if (b && b.heldBy === p.id && p.throwPlan) {
+      const wind = Math.max(1, p.throwPlan.windupMs || 1);
+      const charge01 = clamp((now - p.throwPlan.startAt) / wind, 0, 1);
+      speed *= lerp(1, 0.58, charge01);
+    }
+  }
 
-  p.x += p.vx * dt;
-  p.y += p.vy * dt;
-  p.vx *= Math.pow(FRICTION, dt*60);
-  p.vy *= Math.pow(FRICTION, dt*60);
+  const panicSuppressedForBall = itBallLoose;
+  if (panicSuppressedForBall && p.botPanicUntil > now) {
+    p.botPanicUntil = 0;
+    p.botPanicRetargetAt = 0;
+  }
+  const panicActive = !panicSuppressedForBall && now < (p.botPanicUntil || 0);
+  if (panicActive) {
+    nextState = BOT_STATES.PANIC;
+    if ((p.botPanicRetargetAt || 0) <= now) {
+      const [nx, ny] = choosePanicDir(p, it);
+      p.botPanicDirX = nx;
+      p.botPanicDirY = ny;
+      p.botPanicRetargetAt = now + 120 + 220 * rand01();
+    }
+    const dashLen = 160 + 130 * rand01();
+    tx = p.x + (p.botPanicDirX || 1) * dashLen;
+    ty = p.y + (p.botPanicDirY || 0) * dashLen;
+    speed = Math.max(speed, 960 + 120 * winPush);
+    snap = Math.min(snap, 0.003);
+  }
+
+  const plannedDist = vecLen(tx - p.x, ty - p.y);
+  const prevX = p.x;
+  const prevY = p.y;
+  setBotState(p, nextState);
+  moveToward(p, dt, tx, ty, speed, snap);
+
+  const movedDist = vecLen(p.x - prevX, p.y - prevY);
+  const wantsMove = plannedDist > 120;
+  if (!panicActive && wantsMove && movedDist < (1.6 + dt * 5.5)) {
+    p.botStuckMs = (p.botStuckMs || 0) + dt * 1000;
+  } else if (!panicActive) {
+    p.botStuckMs = Math.max(0, (p.botStuckMs || 0) - dt * 850);
+  } else {
+    p.botStuckMs = 0;
+  }
+
+  if (!panicActive && (p.botStuckMs || 0) > 340) {
+    p.botStuckMs = 0;
+    p.botPanicUntil = now + 1500 + 1700 * rand01();
+    p.botPanicRetargetAt = 0;
+  }
 
   // bot throw logic
-  if (p.it && state.ball.heldBy === p.id) {
-    const now = state.nowMs;
-    const inRange = vecLen(throwTarget.x - p.x, throwTarget.y - p.y) < 900;
-    const cooldownOk = (now - p.lastThrowAt) > 950;
+  if (p.it && allowThrowTransfer && state.ball.heldBy === p.id) {
+    const canStartNewThrowPlan = now >= (p.botPanicUntil || 0);
+    const throwMode = state.itTransferRule === IT_TRANSFER_RULES.THROW_ONLY
+      ? 'throw-only'
+      : (state.itTransferRule === IT_TRANSFER_RULES.HYBRID ? 'hybrid' : 'other');
+    const group01 = clamp(throwTargetGroup01 || 0, 0, 1);
+    const isolation01 = 1 - group01;
+    const throwDist = vecLen(throwTarget.x - p.x, throwTarget.y - p.y);
+    const throwAggro = clamp(0.62 * winPush + 0.38 * shedUrgency, 0, 1);
+    const throwRange = lerp(900, 1180, clamp(0.70 * winPush + 0.30 * shedUrgency, 0, 1));
+    const throwCooldownMs = lerp(760, 250, clamp(0.55 * winPush + 0.45 * shedUrgency, 0, 1));
+    const focusMs = now - (p.botITTargetSince || now);
+    const isolationGate = (throwMode === 'throw-only' ? 0.08 : (throwMode === 'hybrid' ? 0.12 : 0.05)) * isolation01;
+    const forceShotConfMin = (throwMode === 'throw-only' ? 0.72 : (throwMode === 'hybrid' ? 0.67 : 0.62)) + isolationGate;
+    const focusThrowConfMin = (throwMode === 'throw-only' ? 0.48 : (throwMode === 'hybrid' ? 0.42 : 0.34)) + isolationGate * 0.82;
+    const focusThrowMs = throwMode === 'throw-only' ? 560 : (throwMode === 'hybrid' ? 490 : 420);
+    const forceThrow = !preferTag
+      && (((focusMs > focusThrowMs) && shotConfidenceNow > focusThrowConfMin) || shotConfidenceNow > forceShotConfMin)
+      && throwDist > (PLAYER_RADIUS * 2.6);
+    const forceThrowCooldownMs = Math.min(240, throwCooldownMs);
+    const inRange = throwDist < throwRange;
+    const cooldownOk = (now - p.lastThrowAt) > (forceThrow ? forceThrowCooldownMs : throwCooldownMs);
 
-    if (!p.throwPlan && inRange && cooldownOk) {
-      const dist01 = clamp(vecLen(throwTarget.x - p.x, throwTarget.y - p.y) / 900, 0, 1);
-      const targetCharge = clamp(0.40 + 0.50 * dist01 + 0.10 * rand01(), 0.30, 0.95);
+    if (canStartNewThrowPlan && !preferTag && !p.throwPlan && inRange && cooldownOk) {
+      const dist01 = clamp(throwDist / throwRange, 0, 1);
+      const shotAggro = clamp(throwAggro + (forceThrow ? 0.20 : 0), 0, 1);
+      const probeCharge = clamp(0.24 + 0.54 * shotAggro, 0.18, 0.98);
+      const planConfidence = estimateThrowConfidence(p, throwTarget, probeCharge, sensedTargets);
+      const minPlanConfidence = throwMode === 'throw-only'
+        ? lerp(0.58, 0.44, shotAggro)
+        : (throwMode === 'hybrid' ? lerp(0.50, 0.36, shotAggro) : lerp(0.42, 0.28, shotAggro));
+      const requiredPlanConfidence = minPlanConfidence + isolationGate;
+      if (planConfidence < requiredPlanConfidence && !forceThrow) {
+        p.botThrowConfidence = Math.max(p.botThrowConfidence || 0, planConfidence);
+      } else {
+        const confidenceScale = lerp(1.10, 0.80, planConfidence);
+        const targetCharge = clamp((0.24 + 0.28 * dist01 + 0.36 * shotAggro + 0.10 * rand01()) * confidenceScale, 0.18, 0.98);
+        const windupBase = forceThrow ? lerp(220, 90, shotAggro) : lerp(430, 140, shotAggro);
+        const windupMs = windupBase * lerp(1.08, 0.66, planConfidence) + 100 * rand01();
 
-      const tgt = throwTarget;
-      const leadT = 0.16 + 0.14 * rand01();
-      const aimX = tgt.x + tgt.vx * leadT;
-      const aimY = tgt.y + tgt.vy * leadT;
-
-      p.throwPlan = {
-        startAt: now,
-        aimX,
-        aimY,
-        targetCharge,
-        windupMs: 420 + 220 * rand01(),
-      };
-      p.aiming = true;
-      p.aimCharge = 0;
-      p.aimX = aimX;
-      p.aimY = aimY;
+        p.throwPlan = {
+          startAt: now,
+          targetCharge,
+          windupMs,
+        };
+        p.aiming = true;
+        p.aimCharge = 0;
+      }
     }
 
     if (p.throwPlan) {
       const t = clamp((now - p.throwPlan.startAt) / p.throwPlan.windupMs, 0, 1);
+      const [fx, fy] = getForwardDir(p);
       p.aiming = true;
-      p.aimX = p.throwPlan.aimX;
-      p.aimY = p.throwPlan.aimY;
+      p.aimX = p.x + fx * 220;
+      p.aimY = p.y + fy * 220;
       p.aimCharge = t * p.throwPlan.targetCharge;
 
       if (t >= 1) {
-        releaseThrow(p, p.throwPlan.aimX, p.throwPlan.aimY, p.throwPlan.targetCharge);
+        releaseThrow(p, p.throwPlan.targetCharge);
         p.lastThrowAt = now;
         p.throwPlan = null;
         p.aiming = false;
@@ -496,15 +1283,14 @@ function ballBounds(b) {
   }
 }
 
-function releaseThrow(thrower, aimX, aimY, charge01) {
+function releaseThrow(thrower, charge01) {
   const b = state.ball;
   if (!b || b.heldBy !== thrower.id) return;
+  if (thrower.it && !canItThrowTransfer()) return;
 
   const now = state.nowMs;
 
-  const dx = aimX - thrower.x;
-  const dy = aimY - thrower.y;
-  let [nx, ny] = vecNorm(dx, dy);
+  let [nx, ny] = getForwardDir(thrower);
 
   const moveNoise = clamp(vecLen(thrower.vx, thrower.vy) / 540, 0, 1);
   const baseDeg = 3.5;
@@ -516,7 +1302,7 @@ function releaseThrow(thrower, aimX, aimY, charge01) {
   const ry = nx * s + ny * c;
   nx = rx; ny = ry;
 
-  const speed = lerp(MIN_THROW_SPEED, MAX_THROW_SPEED, charge01);
+  const speed = throwSpeedForCharge(charge01);
 
   b.heldBy = null;
   b.lastThrower = thrower.id;
@@ -531,6 +1317,7 @@ function releaseThrow(thrower, aimX, aimY, charge01) {
 function updateOffline(dt) {
   const now = state.nowMs;
   if (state.over) return;
+  refreshItBallTracking(now);
 
   const it = currentIt();
   for (const p of state.players) {
@@ -609,7 +1396,7 @@ function updateOffline(dt) {
       b.vx = 0;
       b.vy = 0;
 
-      if (it && holder.id === it.id) {
+      if (it && holder.id === it.id && canItTagTransfer()) {
         for (const other of state.players) {
           if (other.id === holder.id) continue;
           const d = vecLen(other.x - holder.x, other.y - holder.y);
@@ -627,31 +1414,35 @@ function updateOffline(dt) {
 
       if (holder.human && holder.it) {
         const space = keys.has(' ');
-        const md = mouse.down;
+        const canThrow = canItThrowTransfer();
+        const [fx, fy] = getForwardDir(holder);
 
-        holder.aiming = md || space;
-        holder.aimX = mouse.x;
-        holder.aimY = mouse.y;
+        holder.aiming = canThrow && space;
+        holder.aimX = holder.x + fx * 220;
+        holder.aimY = holder.y + fy * 220;
 
-        if (space && !state.wasSpaceDown) state.spaceDownAt = now;
+        if (canThrow && space && !state.wasSpaceDown) state.spaceDownAt = now;
 
-        const charging = md || space;
-        if (charging) {
-          const start = md ? mouse.downAt : state.spaceDownAt;
+        let throwCharge = holder.aimCharge || 0;
+        if (canThrow && space) {
+          const start = state.spaceDownAt > 0 ? state.spaceDownAt : now;
           const t = clamp((now - start) / CHARGE_MS, 0, 1);
           holder.aimCharge = t;
+          throwCharge = holder.aimCharge;
+        } else {
+          holder.aimCharge = 0;
+          state.spaceDownAt = 0;
         }
 
-        const releasedMouse = (!md && state.wasMouseDown);
-        const releasedSpace = (!space && state.wasSpaceDown);
-        if (releasedMouse || releasedSpace) {
-          releaseThrow(holder, mouse.x, mouse.y, holder.aimCharge || 0);
+        const releasedSpace = canThrow && !space && state.wasSpaceDown;
+        if (releasedSpace) {
+          releaseThrow(holder, throwCharge);
           holder.aiming = false;
           holder.aimCharge = 0;
+          state.spaceDownAt = 0;
         }
 
-        state.wasMouseDown = md;
-        state.wasSpaceDown = space;
+        state.wasSpaceDown = canThrow ? space : false;
       }
     }
   } else {
@@ -661,19 +1452,28 @@ function updateOffline(dt) {
     b.vy *= Math.pow(BALL_FRICTION, dt*60);
     ballBounds(b);
 
+    // IT should be able to reclaim the ball immediately when close.
+    if (it && !b.heldBy) {
+      const dItBall = vecLen(it.x - b.x, it.y - b.y);
+      if (dItBall <= IT_PICKUP_RADIUS) {
+        b.heldBy = it.id;
+        b.lastThrower = null;
+        b.armed = false;
+        b.vx = 0;
+        b.vy = 0;
+      }
+    }
+
     for (const p of state.players) {
       const d = vecLen(p.x - b.x, p.y - b.y);
       if (d > PLAYER_RADIUS + BALL_RADIUS) continue;
 
-      if (it && p.id === it.id && !b.heldBy) {
-        const sp = vecLen(b.vx, b.vy);
-        if (sp < 220) {
-          b.heldBy = it.id;
-          b.lastThrower = null;
-          b.armed = false;
-          b.vx = 0; b.vy = 0;
-          break;
-        }
+      if (it && p.id !== it.id && !b.heldBy) {
+        if ((now - p.lastHitAt) < HIT_COOLDOWN_MS) continue;
+        p.lastHitAt = now;
+        setIt(p.id);
+        b.armed = false;
+        break;
       }
 
       if (b.armed) {
@@ -687,6 +1487,8 @@ function updateOffline(dt) {
 
     if (vecLen(b.vx, b.vy) < 55) b.armed = false;
   }
+
+  refreshItBallTracking(now);
 }
 
 function draw() {
@@ -849,7 +1651,8 @@ function draw() {
     ctx.beginPath();
     ctx.arc(p.x, p.y, PLAYER_RADIUS, 0, TAU);
     const isMe = p.id === (state.playerId || 'me');
-    ctx.fillStyle = isMe ? COLORS.me : (p.human ? 'rgba(255,255,255,.86)' : COLORS.bot);
+    const botColor = (state.mode === 'offline' && !state.online) ? getOfflineBotColor(p, it, state.nowMs) : COLORS.bot;
+    ctx.fillStyle = isMe ? COLORS.me : (p.human ? 'rgba(255,255,255,.86)' : botColor);
     ctx.globalAlpha = p.disconnected ? 0.35 : 1;
     ctx.fill();
     ctx.globalAlpha = 1;
@@ -908,6 +1711,7 @@ function draw() {
   else statusEl.textContent = `${mode} · waiting for IT…`;
 
   const meStatsEl = document.querySelector('#meStats');
+  const goalEl = document.querySelector('#goal');
   const sorted = [...players].sort((a,b) => (b.score || 0) - (a.score || 0));
   const myId = (state.playerId || 'me');
   const me = players.find(p => p.id === myId);
@@ -919,6 +1723,13 @@ function draw() {
   } else if (meStatsEl) {
     meStatsEl.textContent = 'You: —';
   }
+  if (goalEl) {
+    const ruleText = state.itTransferRule === IT_TRANSFER_RULES.THROW_ONLY
+      ? 'IT must throw'
+      : (state.itTransferRule === IT_TRANSFER_RULES.TAG_ONLY ? 'IT must tag' : 'IT can throw or tag');
+    goalEl.textContent = `Goal: avoid IT · ${ruleText}`;
+  }
+  updateLeaderboard(players, myId);
 
   if (state.over && state.winnerId) {
     const wP = state.players.find(p => p.id === state.winnerId);

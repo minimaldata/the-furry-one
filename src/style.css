@@ -11,8 +11,82 @@ body{margin:0;background:var(--bg);color:var(--fg);font-family:ui-sans-serif,sys
 .pill{font-size:12px;border:1px solid var(--border);background:var(--card);border-radius:999px;padding:6px 10px;color:rgba(255,255,255,.86)}
 .btn{cursor:pointer;border:1px solid var(--border);background:var(--card);color:var(--fg);border-radius:10px;padding:7px 10px;font-weight:650}
 .btn:active{transform:translateY(1px)}
-.canvasWrap{flex:1;display:flex;align-items:stretch;justify-content:center}
+.canvasWrap{position:relative;flex:1;display:flex;align-items:stretch;justify-content:center}
 canvas{width:100%;height:100%;display:block}
+.leaderboard{
+  position:absolute;
+  top:12px;
+  right:12px;
+  width:min(280px,calc(100vw - 24px));
+  border:1px solid rgba(255,255,255,.14);
+  background:rgba(10,13,20,.74);
+  backdrop-filter:blur(6px);
+  border-radius:12px;
+  padding:8px 9px;
+  z-index:3;
+  pointer-events:auto;
+  opacity:.92;
+  transition:opacity 120ms linear;
+}
+.leaderboard.occluded{opacity:.08}
+.leaderTitle{
+  font-size:11px;
+  letter-spacing:.08em;
+  color:rgba(255,255,255,.66);
+  margin-bottom:6px;
+}
+.leaderRows{display:flex;flex-direction:column;gap:4px}
+.leaderRow{
+  display:flex;
+  justify-content:space-between;
+  align-items:baseline;
+  gap:10px;
+  font-size:12px;
+  color:rgba(255,255,255,.86);
+}
+.leaderRow.me .leaderName{font-weight:800;color:#86efac}
+.leaderLeft{display:flex;align-items:baseline;gap:7px;min-width:0}
+.leaderRank{width:18px;color:rgba(255,255,255,.54)}
+.leaderName{
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.leaderScore{font-variant-numeric:tabular-nums;min-width:26px;text-align:right}
+.itTag{
+  font-size:10px;
+  color:rgba(245,158,11,.95);
+  letter-spacing:.04em;
+}
+.youTag{
+  font-size:10px;
+  color:rgba(134,239,172,.95);
+  letter-spacing:.04em;
+}
+.leaderDev{
+  margin-top:8px;
+  padding-top:8px;
+  border-top:1px solid rgba(255,255,255,.10);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+}
+.leaderDevLabel{
+  font-size:11px;
+  letter-spacing:.06em;
+  color:rgba(255,255,255,.62);
+  text-transform:uppercase;
+}
+.leaderSelect{
+  border:1px solid rgba(255,255,255,.16);
+  background:rgba(255,255,255,.06);
+  color:rgba(255,255,255,.9);
+  border-radius:8px;
+  padding:4px 6px;
+  font-size:12px;
+  min-width:136px;
+}
 .help{position:absolute;left:12px;bottom:12px;right:12px;display:flex;justify-content:space-between;gap:10px;pointer-events:none}
 .help .card{pointer-events:none;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.10);border-radius:14px;padding:10px 12px;backdrop-filter: blur(6px)}
 .small{font-size:12px;color:rgba(255,255,255,.78);line-height:1.35}

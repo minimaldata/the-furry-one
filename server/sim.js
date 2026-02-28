@@ -20,6 +20,12 @@ function vecNorm(x, y) {
   return [x / L, y / L];
 }
 
+function throwSpeedForCharge(charge01, C) {
+  const c = clamp(charge01 || 0, 0, 1);
+  const shaped = Math.pow(c, 0.74);
+  return lerp(C.MIN_THROW_SPEED, C.MAX_THROW_SPEED, shaped);
+}
+
 export const CONSTANTS = {
   ARENA_W: 1200,
   ARENA_H: 720,
@@ -27,9 +33,9 @@ export const CONSTANTS = {
   PLAYER_RADIUS: 14,
   BALL_RADIUS: 9,
 
-  MAX_THROW_SPEED: 820,
-  MIN_THROW_SPEED: 220,
-  CHARGE_MS: 900,
+  MAX_THROW_SPEED: 1060,
+  MIN_THROW_SPEED: 320,
+  CHARGE_MS: 620,
 
   FRICTION: 0.90,
   BALL_FRICTION: 0.992,
@@ -284,7 +290,7 @@ export function createWorld(opts = {}) {
     const ry = nx * s + ny * c;
     nx = rx; ny = ry;
 
-    const speed = lerp(C.MIN_THROW_SPEED, C.MAX_THROW_SPEED, charge01);
+    const speed = throwSpeedForCharge(charge01, C);
 
     b.heldBy = null;
     b.lastThrower = thrower.id;

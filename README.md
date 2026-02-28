@@ -7,8 +7,8 @@ A small 2D dodgeball tag game prototype.
 
 ## Controls
 - Move: WASD / Arrow Keys
-- Aim: Mouse
-- Throw (only when you are **IT**): click + hold to charge, release to throw (Space also works)
+- Aim: Move in the direction you want to throw
+- Throw (only when you are **IT**): hold Space to charge, release to throw
 
 Goal: spend the least total time as **IT**.
 
