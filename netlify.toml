@@ -1,0 +1,17 @@
+[[redirects]]
+  from = "/api/*"
+  to = "https://the-furry-one.onrender.com/api/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/highscores"
+  to = "https://the-furry-one.onrender.com/api/highscores"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/profile"
+  to = "https://the-furry-one.onrender.com/api/profile"
+  status = 200
+  force = true
