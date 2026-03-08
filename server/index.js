@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { initStore, listHighScores, saveProfile, submitScore } from './store.js';
+import { getAnalytics, getScoreStats, initStore, listHighScores, saveProfile, submitScore } from './store.js';
 
 const PORT = Number(process.env.PORT || 8080);
 const serveStatic = process.env.SERVE_STATIC !== '0';
@@ -89,9 +89,50 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && url.pathname === '/api/highscores') {
+      const limit = Number(url.searchParams.get('limit') || 10);
+      const rule = url.searchParams.get('rule');
+      const name = url.searchParams.get('name') || '';
       sendJson(res, 200, {
         ok: true,
-        scores: listHighScores(Number(url.searchParams.get('limit') || 10)),
+        scores: listHighScores(limit, rule),
+        stats: getScoreStats({ rule, name }),
+      });
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/analytics') {
+      const rule = url.searchParams.get('rule');
+      const name = url.searchParams.get('name') || '';
+      const players = url.searchParams.get('players') || '';
+      const minRuns = Number(url.searchParams.get('minRuns') || 5);
+      const limit = Number(url.searchParams.get('limit') || 8);
+      const summaryN = Number(url.searchParams.get('summaryN') || 20);
+      const summaryMode = url.searchParams.get('summaryMode') || 'last';
+      const summaryStart = Number(url.searchParams.get('summaryStart') || 1);
+      const summaryEnd = Number(url.searchParams.get('summaryEnd') || 20);
+      const scatterKind = url.searchParams.get('scatterKind') || 'losers';
+      const scatterN = Number(url.searchParams.get('scatterN') || 5);
+      const scatterMode = url.searchParams.get('scatterMode') || 'last';
+      const scatterStart = Number(url.searchParams.get('scatterStart') || 1);
+      const scatterEnd = Number(url.searchParams.get('scatterEnd') || 5);
+      sendJson(res, 200, {
+        ok: true,
+        analytics: getAnalytics({
+          rule,
+          name,
+          players,
+          minRuns,
+          limit,
+          summaryN,
+          summaryMode,
+          summaryStart,
+          summaryEnd,
+          scatterKind,
+          scatterN,
+          scatterMode,
+          scatterStart,
+          scatterEnd,
+        }),
       });
       return;
     }

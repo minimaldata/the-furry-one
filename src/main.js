@@ -109,9 +109,37 @@ const IT_TRANSFER_OPTIONS = [
   { value: IT_TRANSFER_RULES.TAG_ONLY, label: 'always tag' },
 ];
 
+const SCORE_DATA_SOURCES = {
+  LIVE: 'live',
+  DUMMY: 'dummy',
+};
+const ALLOW_DUMMY_SCORE_DATA = !!import.meta.env.DEV;
+
+const SCATTER_RANGE_MODES = {
+  LAST: 'last',
+  BETWEEN: 'between',
+};
+
+const SCATTER_TYPES = {
+  LOSERS: 'losers',
+  WINNERS: 'winners',
+};
+
 const STORAGE_KEYS = {
   profileName: 'tfo_profile_name',
   profilePassword: 'tfo_profile_password',
+  scoreDataSource: 'tfo_score_data_source',
+  comparePlayers: 'tfo_compare_players',
+  analyticsMinRuns: 'tfo_analytics_min_runs',
+  summaryWindow: 'tfo_summary_window',
+  summaryMode: 'tfo_summary_mode',
+  summaryStartRun: 'tfo_summary_start_run',
+  summaryEndRun: 'tfo_summary_end_run',
+  scatterType: 'tfo_scatter_type',
+  scatterWindow: 'tfo_scatter_window',
+  scatterMode: 'tfo_scatter_mode',
+  scatterStartRun: 'tfo_scatter_start_run',
+  scatterEndRun: 'tfo_scatter_end_run',
 };
 
 const COLORS = {
@@ -148,31 +176,122 @@ app.innerHTML = `
   <div class="overlay" id="overlay">
     <div class="modal">
       <h2 id="endTitle">The Furry One</h2>
-      <p id="endSub">Play offline, chase a best score, and optionally protect your name with a password.</p>
-      <div class="rows" id="endRows"></div>
-      <div class="profileCard">
-        <div class="sectionTitle">Profile</div>
-        <div class="profileGrid">
-          <input id="profileName" class="field" type="text" maxlength="24" placeholder="Name" />
-          <input id="profilePassword" class="field" type="password" maxlength="128" placeholder="Optional password" />
-        </div>
-        <div class="small" id="profileHint">Optional password claims your name for future high score submissions.</div>
-        <div class="actions profileActions">
-          <button class="btn" id="saveProfile" type="button">Save profile</button>
-          <button class="btn" id="clearPassword" type="button">Clear password</button>
-        </div>
-        <div class="small" id="profileStatus"></div>
+      <p id="endSub">Get furry by being closest to, but not IT</p>
+      <div class="actions runActions">
+        <button class="btn" id="playOffline">Start run</button>
+        <button class="btn" id="switchProfile" type="button">Set profile</button>
+        <div class="runProfile" id="runProfileName">Profile: Player</div>
       </div>
+      <div class="rows" id="endRows"></div>
       <div class="scoreCard">
-        <div class="sectionTitle">High Scores</div>
-        <div class="rows highScoreRows" id="highScoreRows"></div>
-        <div class="small" id="highScoreStatus"></div>
+        <div class="sectionTitle" id="highScoreTitle">High Scores</div>
+        <div class="scoreControls${ALLOW_DUMMY_SCORE_DATA ? '' : ' isHidden'}">
+          <label for="scoreDataSource">Data</label>
+          <select id="scoreDataSource" class="field fieldSelect">
+            <option value="live">live</option>
+            ${ALLOW_DUMMY_SCORE_DATA ? '<option value="dummy">dummy (local test)</option>' : ''}
+          </select>
+        </div>
+        <details class="scoreSection">
+          <summary class="scoreSectionSummary">Analytics Summary</summary>
+          <div class="scoreSectionBody">
+            <div class="scatterControlsCompact">
+              <div class="scatterControlItem">
+                <label for="summaryMode">Window</label>
+                <select id="summaryMode" class="field fieldSelect">
+                  <option value="last">Last N runs</option>
+                  <option value="between">Between run N and M</option>
+                </select>
+              </div>
+            </div>
+            <div class="scatterWindowRow">
+              <div class="scatterWindowGroup" id="summaryRangeLast">
+                <label for="summaryWindow" id="summaryWindowLabel">Run count</label>
+                <input id="summaryWindow" class="field fieldNumber" type="number" min="1" max="100" step="1" value="20" />
+              </div>
+              <div class="scatterWindowGroup scatterWindowGroupRange" id="summaryRangeBetween">
+                <label for="summaryRunStart" id="summaryRunStartLabel">Run</label>
+                <input id="summaryRunStart" class="field fieldNumber" type="number" min="1" max="10000" step="1" value="1" />
+                <span class="scatterWindowSep">to</span>
+                <label for="summaryRunEnd" id="summaryRunEndLabel">Run</label>
+                <input id="summaryRunEnd" class="field fieldNumber" type="number" min="1" max="10000" step="1" value="20" />
+              </div>
+            </div>
+            <div class="analyticsCards" id="analyticsCards"></div>
+          </div>
+        </details>
+        <details class="scoreSection">
+          <summary class="scoreSectionSummary">Scatter Plot</summary>
+          <div class="scoreSectionBody">
+            <div class="scatterControlsCompact">
+              <div class="scatterControlItem">
+                <label for="scatterType">Type</label>
+                <select id="scatterType" class="field fieldSelect">
+                  <option value="losers">Losers</option>
+                  <option value="winners">Winners</option>
+                </select>
+              </div>
+              <div class="scatterControlItem">
+                <label for="scatterMode">Window</label>
+                <select id="scatterMode" class="field fieldSelect">
+                  <option value="last">Last N runs</option>
+                  <option value="between">Between run N and M</option>
+                </select>
+              </div>
+            </div>
+            <div class="scatterWindowRow">
+              <div class="scatterWindowGroup" id="scatterRangeLast">
+                <label for="scatterWindow" id="scatterWindowLabel">Count</label>
+                <input id="scatterWindow" class="field fieldNumber" type="number" min="1" max="100" step="1" value="5" />
+              </div>
+              <div class="scatterWindowGroup scatterWindowGroupRange" id="scatterRangeBetween">
+                <label for="scatterRunStart" id="scatterRunStartLabel">Run</label>
+                <input id="scatterRunStart" class="field fieldNumber" type="number" min="1" max="10000" step="1" value="1" />
+                <span class="scatterWindowSep">to</span>
+                <label for="scatterRunEnd" id="scatterRunEndLabel">Run</label>
+                <input id="scatterRunEnd" class="field fieldNumber" type="number" min="1" max="10000" step="1" value="5" />
+              </div>
+            </div>
+            <div class="scatterCard">
+              <div class="scatterPlot" id="scatterPlot"></div>
+              <div class="small scatterHint" id="scatterHint"></div>
+            </div>
+          </div>
+        </details>
+        <details class="scoreSection">
+          <summary class="scoreSectionSummary">Player Comparison</summary>
+          <div class="scoreSectionBody">
+            <div class="scoreControls scoreControlsWide">
+              <label for="comparePlayers">Compare</label>
+              <input id="comparePlayers" class="field fieldInline" type="text" maxlength="160" placeholder="alice,bob,yoyoyo" />
+              <label for="minRuns">Min Runs</label>
+              <input id="minRuns" class="field fieldNumber" type="number" min="1" max="500" step="1" value="5" />
+              <button class="btn" id="applyAnalytics" type="button">Apply</button>
+            </div>
+            <div class="rows analyticsRows" id="analyticsRows"></div>
+            <div class="small" id="analyticsStatus"></div>
+          </div>
+        </details>
+        <details class="scoreSection">
+          <summary class="scoreSectionSummary">Top Runs</summary>
+          <div class="scoreSectionBody">
+            <div class="rows highScoreRows" id="highScoreRows"></div>
+            <div class="small" id="highScoreStatus"></div>
+          </div>
+        </details>
+        <div class="profileInline isHidden" id="profileInlineEditor">
+          <div class="profileInlineGrid">
+            <input id="profileName" class="field" type="text" maxlength="24" placeholder="Name" />
+            <input id="profilePassword" class="field" type="password" maxlength="128" placeholder="Optional password" />
+          </div>
+          <div class="actions profileInlineActions">
+            <button class="btn" id="saveProfile" type="button">Save profile</button>
+            <button class="btn" id="clearPassword" type="button">Clear password</button>
+          </div>
+        </div>
         <div class="actions scoreActions" id="scoreActions">
           <button class="btn" id="submitHighScore" type="button">Submit score</button>
         </div>
-      </div>
-      <div class="actions">
-        <button class="btn" id="playOffline">Start run</button>
       </div>
     </div>
   </div>
@@ -188,14 +307,47 @@ const endTitleEl = document.querySelector('#endTitle');
 const endSubEl = document.querySelector('#endSub');
 const endRowsEl = document.querySelector('#endRows');
 const playOfflineBtn = document.querySelector('#playOffline');
+const profileInlineEditorEl = document.querySelector('#profileInlineEditor');
+const runProfileNameEl = document.querySelector('#runProfileName');
 const profileNameEl = document.querySelector('#profileName');
 const profilePasswordEl = document.querySelector('#profilePassword');
-const profileStatusEl = document.querySelector('#profileStatus');
+const saveProfileBtn = document.querySelector('#saveProfile');
+const clearPasswordBtn = document.querySelector('#clearPassword');
+const highScoreTitleEl = document.querySelector('#highScoreTitle');
+const scoreDataSourceEl = document.querySelector('#scoreDataSource');
+const comparePlayersEl = document.querySelector('#comparePlayers');
+const minRunsEl = document.querySelector('#minRuns');
+const applyAnalyticsBtn = document.querySelector('#applyAnalytics');
+const cdfChartEl = document.querySelector('#cdfChart');
+const cdfHintEl = document.querySelector('#cdfHint');
+const summaryModeEl = document.querySelector('#summaryMode');
+const summaryWindowEl = document.querySelector('#summaryWindow');
+const summaryRunStartEl = document.querySelector('#summaryRunStart');
+const summaryRunEndEl = document.querySelector('#summaryRunEnd');
+const summaryRangeLastEl = document.querySelector('#summaryRangeLast');
+const summaryRangeBetweenEl = document.querySelector('#summaryRangeBetween');
+const summaryWindowLabelEl = document.querySelector('#summaryWindowLabel');
+const summaryRunStartLabelEl = document.querySelector('#summaryRunStartLabel');
+const summaryRunEndLabelEl = document.querySelector('#summaryRunEndLabel');
+const scatterTypeEl = document.querySelector('#scatterType');
+const scatterModeEl = document.querySelector('#scatterMode');
+const scatterWindowEl = document.querySelector('#scatterWindow');
+const scatterRunStartEl = document.querySelector('#scatterRunStart');
+const scatterRunEndEl = document.querySelector('#scatterRunEnd');
+const scatterRangeLastEl = document.querySelector('#scatterRangeLast');
+const scatterRangeBetweenEl = document.querySelector('#scatterRangeBetween');
+const scatterWindowLabelEl = document.querySelector('#scatterWindowLabel');
+const scatterRunStartLabelEl = document.querySelector('#scatterRunStartLabel');
+const scatterRunEndLabelEl = document.querySelector('#scatterRunEndLabel');
+const scatterPlotEl = document.querySelector('#scatterPlot');
+const scatterHintEl = document.querySelector('#scatterHint');
+const analyticsCardsEl = document.querySelector('#analyticsCards');
+const analyticsRowsEl = document.querySelector('#analyticsRows');
+const analyticsStatusEl = document.querySelector('#analyticsStatus');
 const highScoreRowsEl = document.querySelector('#highScoreRows');
 const highScoreStatusEl = document.querySelector('#highScoreStatus');
 const submitHighScoreBtn = document.querySelector('#submitHighScore');
-const saveProfileBtn = document.querySelector('#saveProfile');
-const clearPasswordBtn = document.querySelector('#clearPassword');
+const switchProfileBtn = document.querySelector('#switchProfile');
 const scoreActionsEl = document.querySelector('#scoreActions');
 let leaderboardSig = '';
 let highScoreSig = null;
@@ -215,7 +367,13 @@ if (leaderboardEl) {
     if (t.id === 'itTransferRule') {
       const next = String(t.value || IT_TRANSFER_RULES.HYBRID);
       const ok = IT_TRANSFER_OPTIONS.some(o => o.value === next);
-      state.itTransferRule = ok ? next : IT_TRANSFER_RULES.HYBRID;
+      const nextRule = ok ? next : IT_TRANSFER_RULES.HYBRID;
+      if (state.itTransferRule !== nextRule) {
+        state.itTransferRule = nextRule;
+        highScoreSig = null;
+        updateHighScoreTitle();
+        refreshHighScores();
+      }
     }
   });
 }
@@ -339,20 +497,732 @@ async function apiFetch(pathname, options = {}) {
   return data;
 }
 
+const SCORE_DIST_CHART = { width: 420, height: 170, padL: 34, padR: 12, padT: 10, padB: 24 };
+const SCATTER_CHART = { width: 420, height: 220, padL: 38, padR: 14, padT: 10, padB: 30 };
+
+function normalizeNameForKey(name) {
+  return String(name || '').trim().replace(/\s+/g, ' ').slice(0, 24).toLowerCase();
+}
+
+function parseScoreDataSource(value) {
+  if (!ALLOW_DUMMY_SCORE_DATA) return SCORE_DATA_SOURCES.LIVE;
+  return value === SCORE_DATA_SOURCES.DUMMY ? SCORE_DATA_SOURCES.DUMMY : SCORE_DATA_SOURCES.LIVE;
+}
+
+function getStoredScoreDataSource() {
+  return parseScoreDataSource(localStorage.getItem(STORAGE_KEYS.scoreDataSource) || SCORE_DATA_SOURCES.LIVE);
+}
+
+function getInitialScoreDataSource() {
+  if (!ALLOW_DUMMY_SCORE_DATA) return SCORE_DATA_SOURCES.LIVE;
+  const params = new URLSearchParams(window.location.search || '');
+  if (params.get('dummyScores') === '1') return SCORE_DATA_SOURCES.DUMMY;
+  return getStoredScoreDataSource();
+}
+
+function sanitizeComparePlayers(value) {
+  return String(value || '')
+    .split(',')
+    .map((v) => String(v || '').trim().replace(/\s+/g, ' ').slice(0, 24))
+    .filter(Boolean)
+    .slice(0, 12)
+    .join(',');
+}
+
+function getStoredComparePlayers() {
+  return sanitizeComparePlayers(localStorage.getItem(STORAGE_KEYS.comparePlayers) || '');
+}
+
+function parseMinRuns(value, fallback = 5) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(1, Math.min(500, n));
+}
+
+function getStoredMinRuns() {
+  return parseMinRuns(localStorage.getItem(STORAGE_KEYS.analyticsMinRuns), 5);
+}
+
+function getStoredSummaryWindow() {
+  return parseScatterWindow(localStorage.getItem(STORAGE_KEYS.summaryWindow), 20);
+}
+
+function getStoredSummaryMode() {
+  return parseScatterMode(localStorage.getItem(STORAGE_KEYS.summaryMode));
+}
+
+function getStoredSummaryStartRun() {
+  return parseScatterRunIndex(localStorage.getItem(STORAGE_KEYS.summaryStartRun), 1);
+}
+
+function getStoredSummaryEndRun() {
+  return parseScatterRunIndex(localStorage.getItem(STORAGE_KEYS.summaryEndRun), 20);
+}
+
+function parseScatterWindow(value, fallback = 5) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(1, Math.min(100, n));
+}
+
+function getStoredScatterWindow() {
+  return parseScatterWindow(localStorage.getItem(STORAGE_KEYS.scatterWindow), 5);
+}
+
+function parseScatterType(value) {
+  return value === SCATTER_TYPES.WINNERS ? SCATTER_TYPES.WINNERS : SCATTER_TYPES.LOSERS;
+}
+
+function getStoredScatterType() {
+  return parseScatterType(localStorage.getItem(STORAGE_KEYS.scatterType));
+}
+
+function parseScatterMode(value) {
+  return value === SCATTER_RANGE_MODES.BETWEEN ? SCATTER_RANGE_MODES.BETWEEN : SCATTER_RANGE_MODES.LAST;
+}
+
+function getStoredScatterMode() {
+  return parseScatterMode(localStorage.getItem(STORAGE_KEYS.scatterMode));
+}
+
+function parseScatterRunIndex(value, fallback = 1) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(1, Math.min(10000, n));
+}
+
+function normalizeScatterRange(startRun, endRun, fallbackStart = 1, fallbackEnd = 5) {
+  const start = parseScatterRunIndex(startRun, fallbackStart);
+  const end = parseScatterRunIndex(endRun, fallbackEnd);
+  if (start <= end) return { startRun: start, endRun: end };
+  return { startRun: end, endRun: start };
+}
+
+function getStoredScatterStartRun() {
+  return parseScatterRunIndex(localStorage.getItem(STORAGE_KEYS.scatterStartRun), 1);
+}
+
+function getStoredScatterEndRun() {
+  return parseScatterRunIndex(localStorage.getItem(STORAGE_KEYS.scatterEndRun), 5);
+}
+
+function emptyScoreStats() {
+  return {
+    totalRuns: 0,
+    playerRuns: 0,
+    pdf: {
+      x: Array.from({ length: 101 }, (_, i) => i),
+      all: Array.from({ length: 101 }, () => 0),
+      player: Array.from({ length: 101 }, () => 0),
+    },
+  };
+}
+
+function emptyAnalytics() {
+  return {
+    minRuns: 5,
+    summary: {
+      mode: SCATTER_RANGE_MODES.LAST,
+      windowRuns: 20,
+      startRun: 1,
+      endRun: 20,
+      totalRuns: 0,
+      totalPlayers: 0,
+      currentPercentiles: {
+        winRate: null,
+        nonWinScore: null,
+        winTime: null,
+      },
+      everyonePercentiles: {
+        winRate: null,
+        nonWinScore: null,
+        winTime: null,
+      },
+      current: {
+        name: 'Player',
+        nameKey: 'player',
+        totalRuns: 0,
+        winCount: 0,
+        winRate: 0,
+        medianWinTimeMs: null,
+        nonWinCount: 0,
+        medianNonWinScore: null,
+        meetsMinRuns: false,
+      },
+      everyone: {
+        name: 'Everyone',
+        nameKey: 'everyone',
+        totalRuns: 0,
+        winCount: 0,
+        winRate: 0,
+        medianWinTimeMs: null,
+        nonWinCount: 0,
+        medianNonWinScore: null,
+        meetsMinRuns: false,
+      },
+    },
+    currentPercentiles: {
+      winRate: null,
+      nonWinScore: null,
+      winTime: null,
+    },
+    everyonePercentiles: {
+      winRate: null,
+      nonWinScore: null,
+      winTime: null,
+    },
+    scatterKind: SCATTER_TYPES.LOSERS,
+    scatterN: 5,
+    scatterMode: SCATTER_RANGE_MODES.LAST,
+    scatterStart: 1,
+    scatterEnd: 5,
+    totalRuns: 0,
+    totalPlayers: 0,
+    current: {
+      name: 'Player',
+      nameKey: 'player',
+      totalRuns: 0,
+      winCount: 0,
+      winRate: 0,
+      medianWinTimeMs: null,
+      nonWinCount: 0,
+      medianNonWinScore: null,
+      meetsMinRuns: false,
+    },
+    everyone: {
+      name: 'Everyone',
+      nameKey: 'everyone',
+      totalRuns: 0,
+      winCount: 0,
+      winRate: 0,
+      medianWinTimeMs: null,
+      nonWinCount: 0,
+      medianNonWinScore: null,
+      meetsMinRuns: false,
+    },
+    compared: [],
+    availablePlayers: [],
+    scatter: {
+      kind: SCATTER_TYPES.LOSERS,
+      mode: SCATTER_RANGE_MODES.LAST,
+      windowRuns: 5,
+      startRun: 1,
+      endRun: 5,
+      eligiblePlayers: 0,
+      points: [],
+    },
+  };
+}
+
+function compareScoreRows(a, b) {
+  if ((b.score || 0) !== (a.score || 0)) return (b.score || 0) - (a.score || 0);
+  const aGame = Number.isFinite(Number(a.gameTimeMs)) && Number(a.gameTimeMs) > 0 ? Number(a.gameTimeMs) : 1e12;
+  const bGame = Number.isFinite(Number(b.gameTimeMs)) && Number(b.gameTimeMs) > 0 ? Number(b.gameTimeMs) : 1e12;
+  if (aGame !== bGame) return aGame - bGame;
+  if ((a.furryMs || 0) !== (b.furryMs || 0)) return (a.furryMs || 0) - (b.furryMs || 0);
+  return String(a.updatedAt || '').localeCompare(String(b.updatedAt || ''));
+}
+
+function smoothProbabilitySeries(values, radius = 2) {
+  if (!values.length) return values;
+  const out = values.map((_, i) => {
+    let sum = 0;
+    let wSum = 0;
+    for (let j = Math.max(0, i - radius); j <= Math.min(values.length - 1, i + radius); j++) {
+      const w = radius + 1 - Math.abs(j - i);
+      sum += values[j] * w;
+      wSum += w;
+    }
+    return wSum > 0 ? (sum / wSum) : 0;
+  });
+  const area = out.reduce((a, b) => a + b, 0);
+  if (area <= 0) return out;
+  return out.map((v) => v / area);
+}
+
+function buildPdfSeries(scores) {
+  const xs = Array.from({ length: 101 }, (_, i) => i);
+  if (!scores.length) return xs.map(() => 0);
+  const counts = xs.map(() => 0);
+  for (const score of scores) {
+    const idx = Math.round(clamp(Number(score) || 0, 0, 100));
+    counts[idx] += 1;
+  }
+  const probs = counts.map((c) => c / scores.length);
+  return smoothProbabilitySeries(probs, 2);
+}
+
+function buildScoreStatsFromRuns(runs, profileName) {
+  const pKey = normalizeNameForKey(profileName);
+  const allScores = runs.map((r) => Math.round(clamp(Number(r?.score) || 0, 0, 100)));
+  const myScores = runs
+    .filter((r) => normalizeNameForKey(r?.name || r?.nameKey) === pKey)
+    .map((r) => Math.round(clamp(Number(r?.score) || 0, 0, 100)));
+  return {
+    totalRuns: runs.length,
+    playerRuns: myScores.length,
+    pdf: {
+      x: Array.from({ length: 101 }, (_, i) => i),
+      all: buildPdfSeries(allScores),
+      player: buildPdfSeries(myScores),
+    },
+  };
+}
+
+function median(values) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[mid];
+  return (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function summarizeRunsForAnalytics(runs, identity = {}) {
+  const totalRuns = runs.length;
+  const wins = runs.filter((run) => Number(run?.score || 0) >= 100);
+  const winTimes = wins
+    .map((run) => Number(run?.gameTimeMs))
+    .filter((v) => Number.isFinite(v) && v > 0);
+  const nonWinScores = runs
+    .filter((run) => Number(run?.score || 0) < 100)
+    .map((run) => Math.round(clamp(Number(run?.score) || 0, 0, 100)));
+
+  return {
+    name: identity.name || 'Player',
+    nameKey: identity.nameKey || normalizeNameForKey(identity.name || 'Player'),
+    totalRuns,
+    winCount: wins.length,
+    winRate: totalRuns > 0 ? (wins.length / totalRuns) : 0,
+    medianWinTimeMs: median(winTimes),
+    nonWinCount: nonWinScores.length,
+    medianNonWinScore: median(nonWinScores),
+  };
+}
+
+function comparePlayerAnalytics(a, b) {
+  if ((b.winRate || 0) !== (a.winRate || 0)) return (b.winRate || 0) - (a.winRate || 0);
+  if ((b.winCount || 0) !== (a.winCount || 0)) return (b.winCount || 0) - (a.winCount || 0);
+  const aTime = Number.isFinite(a.medianWinTimeMs) ? a.medianWinTimeMs : 1e12;
+  const bTime = Number.isFinite(b.medianWinTimeMs) ? b.medianWinTimeMs : 1e12;
+  if (aTime !== bTime) return aTime - bTime;
+  if ((b.medianNonWinScore || 0) !== (a.medianNonWinScore || 0)) return (b.medianNonWinScore || 0) - (a.medianNonWinScore || 0);
+  if ((b.totalRuns || 0) !== (a.totalRuns || 0)) return (b.totalRuns || 0) - (a.totalRuns || 0);
+  return String(a.name || '').localeCompare(String(b.name || ''));
+}
+
+function metricPercentile(value, values, higherIsBetter = true) {
+  const target = Number(value);
+  const pool = values.map((v) => Number(v)).filter((v) => Number.isFinite(v));
+  if (!Number.isFinite(target) || pool.length === 0) return null;
+  let better = 0;
+  let equal = 0;
+  for (const v of pool) {
+    if (v === target) equal += 1;
+    else if (higherIsBetter ? (v < target) : (v > target)) better += 1;
+  }
+  return clamp(((better + (equal * 0.5)) / pool.length) * 100, 0, 100);
+}
+
+function buildCurrentPercentiles(summaries, currentSummary) {
+  const winRate = metricPercentile(
+    currentSummary?.winRate,
+    summaries.map((s) => s.winRate),
+    true,
+  );
+  const nonWinScore = metricPercentile(
+    currentSummary?.medianNonWinScore,
+    summaries
+      .filter((s) => Number.isFinite(s.medianNonWinScore))
+      .map((s) => s.medianNonWinScore),
+    true,
+  );
+  const winTime = metricPercentile(
+    currentSummary?.medianWinTimeMs,
+    summaries
+      .filter((s) => Number.isFinite(s.medianWinTimeMs))
+      .map((s) => s.medianWinTimeMs),
+    false,
+  );
+  return { winRate, nonWinScore, winTime };
+}
+
+function parseComparePlayers(value) {
+  return sanitizeComparePlayers(value)
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean)
+    .map((name) => ({ name, nameKey: normalizeNameForKey(name) }));
+}
+
+function runTimestampMs(run) {
+  const t = Date.parse(run?.runAt || run?.updatedAt || '');
+  return Number.isFinite(t) ? t : 0;
+}
+
+function selectRunsByWindow(sortedRuns, { mode, windowRuns, startRun, endRun, requireFullLast = false } = {}) {
+  if (!Array.isArray(sortedRuns) || sortedRuns.length === 0) return [];
+  const modeNorm = parseScatterMode(mode);
+  if (modeNorm === SCATTER_RANGE_MODES.BETWEEN) {
+    if (sortedRuns.length < endRun) return [];
+    return sortedRuns.slice(startRun - 1, endRun);
+  }
+  if (requireFullLast && sortedRuns.length < windowRuns) return [];
+  return sortedRuns.slice(-windowRuns);
+}
+
+function buildScatterFromRuns(
+  runs,
+  { kind = SCATTER_TYPES.LOSERS, mode = SCATTER_RANGE_MODES.LAST, windowRuns = 5, startRun = 1, endRun = 5 } = {},
+) {
+  const scatterKind = parseScatterType(kind);
+  const scatterMode = parseScatterMode(mode);
+  const scatterWindow = parseScatterWindow(windowRuns, 5);
+  const range = normalizeScatterRange(startRun, endRun, 1, Math.max(5, scatterWindow));
+  const scatterStart = range.startRun;
+  const scatterEnd = range.endRun;
+  const betweenLen = Math.max(1, (scatterEnd - scatterStart) + 1);
+  const byKey = new Map();
+  for (const run of runs) {
+    const key = normalizeNameForKey(run?.name || run?.nameKey || '');
+    if (!key) continue;
+    let bucket = byKey.get(key);
+    if (!bucket) {
+      bucket = { name: run?.name || key, nameKey: key, runs: [] };
+      byKey.set(key, bucket);
+    }
+    if (run?.name) bucket.name = run.name;
+    bucket.runs.push(run);
+  }
+
+  const points = [];
+  for (const bucket of byKey.values()) {
+    const sorted = [...bucket.runs].sort((a, b) => runTimestampMs(a) - runTimestampMs(b));
+    const source = scatterKind === SCATTER_TYPES.WINNERS
+      ? sorted.filter((r) => Number(r?.score || 0) >= 100)
+      : sorted;
+    let sample = [];
+    if (scatterMode === SCATTER_RANGE_MODES.BETWEEN) {
+      if (source.length < scatterEnd) continue;
+      sample = source.slice(scatterStart - 1, scatterEnd);
+      if (sample.length !== betweenLen) continue;
+    } else {
+      if (source.length < scatterWindow) continue;
+      sample = source.slice(-scatterWindow);
+    }
+    if (!sample.length) continue;
+    const basePoint = {
+      name: bucket.name,
+      nameKey: bucket.nameKey,
+      runCount: source.length,
+      sampleRuns: sample.length,
+    };
+    if (scatterKind === SCATTER_TYPES.WINNERS) {
+      const avgGameTimeMs = sample.reduce((sum, r) => sum + Math.max(0, Number(r?.gameTimeMs) || 0), 0) / sample.length;
+      const avgFurryMs = sample.reduce((sum, r) => sum + Math.max(0, Number(r?.furryMs) || 0), 0) / sample.length;
+      points.push({
+        ...basePoint,
+        avgGameTimeMs,
+        avgFurryMs,
+      });
+    } else {
+      const avgScore = sample.reduce((sum, r) => sum + Math.round(clamp(Number(r?.score) || 0, 0, 100)), 0) / sample.length;
+      const avgWinRate = sample.reduce((sum, r) => sum + ((Number(r?.score || 0) >= 100) ? 1 : 0), 0) / sample.length;
+      points.push({
+        ...basePoint,
+        avgScore,
+        avgWinRate,
+      });
+    }
+  }
+
+  points.sort((a, b) => {
+    if ((b.runCount || 0) !== (a.runCount || 0)) return (b.runCount || 0) - (a.runCount || 0);
+    return String(a.name || '').localeCompare(String(b.name || ''));
+  });
+
+  return {
+    kind: scatterKind,
+    mode: scatterMode,
+    windowRuns: scatterWindow,
+    startRun: scatterStart,
+    endRun: scatterEnd,
+    eligiblePlayers: points.length,
+    points,
+  };
+}
+
+function buildAnalyticsFromRuns(
+  runs,
+  {
+    currentName,
+    comparePlayers,
+    minRuns,
+    limit = 8,
+    summaryN = 20,
+    summaryMode = SCATTER_RANGE_MODES.LAST,
+    summaryStart = 1,
+    summaryEnd = 20,
+    scatterN = 5,
+    scatterKind = SCATTER_TYPES.LOSERS,
+    scatterMode = SCATTER_RANGE_MODES.LAST,
+    scatterStart = 1,
+    scatterEnd = 5,
+  },
+) {
+  const minRunsNum = parseMinRuns(minRuns, 5);
+  const limitNum = Math.max(1, Math.min(50, Math.round(Number(limit) || 8)));
+  const summaryWindow = parseScatterWindow(summaryN, 20);
+  const summaryModeNorm = parseScatterMode(summaryMode);
+  const summaryRange = normalizeScatterRange(summaryStart, summaryEnd, 1, Math.max(20, summaryWindow));
+  const scatterWindow = parseScatterWindow(scatterN, 5);
+  const scatterKindNorm = parseScatterType(scatterKind);
+  const scatterModeNorm = parseScatterMode(scatterMode);
+  const scatterRange = normalizeScatterRange(scatterStart, scatterEnd, 1, Math.max(5, scatterWindow));
+  const byKey = new Map();
+  for (const run of runs) {
+    const key = normalizeNameForKey(run?.name || run?.nameKey || '');
+    if (!key) continue;
+    let bucket = byKey.get(key);
+    if (!bucket) {
+      bucket = { name: run?.name || key, nameKey: key, runs: [] };
+      byKey.set(key, bucket);
+    }
+    if (run?.name) bucket.name = run.name;
+    bucket.runs.push(run);
+  }
+
+  const summaries = [...byKey.values()].map((bucket) => summarizeRunsForAnalytics(bucket.runs, {
+    name: bucket.name,
+    nameKey: bucket.nameKey,
+  }));
+  const summaryMap = new Map(summaries.map((s) => [s.nameKey, s]));
+
+  const currentClean = String(currentName || 'Player').trim().slice(0, 24) || 'Player';
+  const currentKey = normalizeNameForKey(currentClean);
+  const current = summaryMap.get(currentKey) || summarizeRunsForAnalytics([], { name: currentClean, nameKey: currentKey });
+  const everyone = summarizeRunsForAnalytics(runs, { name: 'Everyone', nameKey: 'everyone' });
+  const currentPercentiles = buildCurrentPercentiles(summaries, current);
+  const everyonePercentiles = buildCurrentPercentiles(summaries, everyone);
+
+  const summaryGroups = new Map();
+  const summaryRuns = [];
+  for (const bucket of byKey.values()) {
+    const sorted = [...bucket.runs].sort((a, b) => runTimestampMs(a) - runTimestampMs(b));
+    const sample = selectRunsByWindow(sorted, {
+      mode: summaryModeNorm,
+      windowRuns: summaryWindow,
+      startRun: summaryRange.startRun,
+      endRun: summaryRange.endRun,
+      requireFullLast: false,
+    });
+    if (!sample.length) continue;
+    summaryGroups.set(bucket.nameKey, { name: bucket.name, nameKey: bucket.nameKey, runs: sample });
+    summaryRuns.push(...sample);
+  }
+  const summarySummaries = [...summaryGroups.values()].map((bucket) => summarizeRunsForAnalytics(bucket.runs, {
+    name: bucket.name,
+    nameKey: bucket.nameKey,
+  }));
+  const summaryByKey = new Map(summarySummaries.map((s) => [s.nameKey, s]));
+  const summaryCurrent = summaryByKey.get(currentKey) || summarizeRunsForAnalytics([], { name: currentClean, nameKey: currentKey });
+  const summaryEveryone = summarizeRunsForAnalytics(summaryRuns, { name: 'Everyone', nameKey: 'everyone' });
+  const summaryCurrentPercentiles = buildCurrentPercentiles(summarySummaries, summaryCurrent);
+  const summaryEveryonePercentiles = buildCurrentPercentiles(summarySummaries, summaryEveryone);
+
+  const selected = parseComparePlayers(comparePlayers);
+  let compared;
+  if (selected.length > 0) {
+    compared = selected.map((p) => {
+      const s = summaryMap.get(p.nameKey) || summarizeRunsForAnalytics([], p);
+      return { ...s, meetsMinRuns: s.totalRuns >= minRunsNum };
+    });
+  } else {
+    compared = summaries
+      .filter((s) => s.totalRuns >= minRunsNum)
+      .sort(comparePlayerAnalytics)
+      .slice(0, limitNum)
+      .map((s) => ({ ...s, meetsMinRuns: true }));
+    if (current.totalRuns > 0 && !compared.some((s) => s.nameKey === current.nameKey)) {
+      compared = [{ ...current, meetsMinRuns: current.totalRuns >= minRunsNum }, ...compared].slice(0, limitNum);
+    }
+  }
+
+  const availablePlayers = summaries
+    .slice()
+    .sort((a, b) => {
+      if ((b.totalRuns || 0) !== (a.totalRuns || 0)) return (b.totalRuns || 0) - (a.totalRuns || 0);
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    })
+    .slice(0, 200)
+    .map((s) => ({
+      name: s.name,
+      nameKey: s.nameKey,
+      totalRuns: s.totalRuns,
+      winRate: s.winRate,
+    }));
+
+  const scatter = buildScatterFromRuns(runs, {
+    kind: scatterKindNorm,
+    mode: scatterModeNorm,
+    windowRuns: scatterWindow,
+    startRun: scatterRange.startRun,
+    endRun: scatterRange.endRun,
+  });
+
+  return {
+    minRuns: minRunsNum,
+    summary: {
+      mode: summaryModeNorm,
+      windowRuns: summaryWindow,
+      startRun: summaryRange.startRun,
+      endRun: summaryRange.endRun,
+      totalRuns: summaryRuns.length,
+      totalPlayers: summarySummaries.length,
+      currentPercentiles: summaryCurrentPercentiles,
+      everyonePercentiles: summaryEveryonePercentiles,
+      current: { ...summaryCurrent, meetsMinRuns: summaryCurrent.totalRuns >= minRunsNum },
+      everyone: { ...summaryEveryone, meetsMinRuns: summaryEveryone.totalRuns >= minRunsNum },
+    },
+    currentPercentiles,
+    everyonePercentiles,
+    scatterKind: scatter.kind,
+    scatterN: scatterWindow,
+    scatterMode: scatter.mode,
+    scatterStart: scatter.startRun,
+    scatterEnd: scatter.endRun,
+    totalRuns: runs.length,
+    totalPlayers: summaries.length,
+    current: { ...current, meetsMinRuns: current.totalRuns >= minRunsNum },
+    everyone: { ...everyone, meetsMinRuns: everyone.totalRuns >= minRunsNum },
+    compared,
+    availablePlayers,
+    scatter,
+  };
+}
+
+function makeDummyRuns(profileName) {
+  const me = String(profileName || 'Player').trim().slice(0, 24) || 'Player';
+  const names = [me, 'yoyoyo', 'Mara', 'Sable', 'Echo', 'Quinn', 'Rook', 'Tess', 'Nova', 'Kite'];
+  const byKey = new Map(names.map((name) => [normalizeNameForKey(name), name]));
+  const skillByKey = {
+    [normalizeNameForKey('yoyoyo')]: { scoreMean: 87, scoreSpread: 8, winRate: 0.44, learnRate: 2.3, timeBias: -26000, furryBias: -4200 },
+    [normalizeNameForKey('Nova')]: { scoreMean: 82, scoreSpread: 9, winRate: 0.36, learnRate: 2.0, timeBias: -20000, furryBias: -3200 },
+    [normalizeNameForKey('Mara')]: { scoreMean: 76, scoreSpread: 10, winRate: 0.27, learnRate: 1.8, timeBias: -13000, furryBias: -1800 },
+    [normalizeNameForKey('Tess')]: { scoreMean: 74, scoreSpread: 10, winRate: 0.24, learnRate: 1.6, timeBias: -11000, furryBias: -1300 },
+    [normalizeNameForKey(me)]: { scoreMean: 73, scoreSpread: 11, winRate: 0.23, learnRate: 1.9, timeBias: -9000, furryBias: -1100 },
+    [normalizeNameForKey('Quinn')]: { scoreMean: 67, scoreSpread: 12, winRate: 0.16, learnRate: 1.3, timeBias: -4000, furryBias: 300 },
+    [normalizeNameForKey('Sable')]: { scoreMean: 64, scoreSpread: 12, winRate: 0.13, learnRate: 1.2, timeBias: -2000, furryBias: 900 },
+    [normalizeNameForKey('Rook')]: { scoreMean: 59, scoreSpread: 13, winRate: 0.09, learnRate: 0.8, timeBias: 5000, furryBias: 1700 },
+    [normalizeNameForKey('Kite')]: { scoreMean: 56, scoreSpread: 14, winRate: 0.07, learnRate: 0.7, timeBias: 7000, furryBias: 2200 },
+    [normalizeNameForKey('Echo')]: { scoreMean: 52, scoreSpread: 14, winRate: 0.05, learnRate: 0.6, timeBias: 9000, furryBias: 2600 },
+  };
+  const defaultSkill = { scoreMean: 64, scoreSpread: 12, winRate: 0.12, learnRate: 1.0, timeBias: 0, furryBias: 0 };
+  const participantPool = [
+    me, me,
+    'yoyoyo', 'yoyoyo', 'yoyoyo',
+    'Nova', 'Nova',
+    'Mara', 'Mara',
+    'Tess', 'Tess',
+    'Quinn',
+    'Sable',
+    'Rook',
+    'Kite',
+    'Echo',
+  ];
+  const rules = IT_TRANSFER_OPTIONS.map((o) => o.value);
+  const now = Date.now();
+  const seeded01 = (i, salt) => {
+    const v = Math.sin((i + 1) * 12.9898 + salt * 78.233) * 43758.5453;
+    return v - Math.floor(v);
+  };
+  const nameSalt = (nameKey) => {
+    let h = 0;
+    for (let i = 0; i < nameKey.length; i++) h = (h + nameKey.charCodeAt(i) * (i + 1)) % 9973;
+    return h;
+  };
+  const totalRuns = 1240; // original 240 + 1000 additional runs
+  const playerRunCounts = new Map();
+  const runs = [];
+  for (let i = 0; i < totalRuns; i++) {
+    const rule = rules[i % rules.length];
+    const name = participantPool[Math.floor(seeded01(i, 1) * participantPool.length) % participantPool.length];
+    const key = normalizeNameForKey(name);
+    const canonicalName = byKey.get(key) || name;
+    const skill = skillByKey[key] || defaultSkill;
+    const salt = nameSalt(key);
+    const playerRunNum = (playerRunCounts.get(key) || 0) + 1;
+    playerRunCounts.set(key, playerRunNum);
+
+    const progressBonus = Math.log2(playerRunNum + 1) * skill.learnRate;
+    const ruleScoreOffset = rule === IT_TRANSFER_RULES.THROW_ONLY ? -3 : (rule === IT_TRANSFER_RULES.TAG_ONLY ? 2 : 0);
+    const ruleWinOffset = rule === IT_TRANSFER_RULES.THROW_ONLY ? -0.02 : (rule === IT_TRANSFER_RULES.TAG_ONLY ? 0.03 : 0);
+    const noise = (seeded01(i, 2 + salt * 0.017) - 0.5) * skill.scoreSpread * 2;
+    const formSwing = Math.sin((i + salt) * 0.031) * 3.2;
+    const baseScore = skill.scoreMean + progressBonus + ruleScoreOffset + noise + formSwing;
+    const winChance = clamp(skill.winRate + ruleWinOffset + Math.min(progressBonus * 0.004, 0.08), 0.01, 0.92);
+    const didWin = seeded01(i, 3 + salt * 0.019) < winChance;
+    const score = didWin
+      ? 100
+      : Math.round(clamp(baseScore, 0, 99));
+
+    let gameTimeMs = 212000
+      - score * 1120
+      + skill.timeBias
+      - progressBonus * 860
+      + (seeded01(i, 4 + salt * 0.023) - 0.5) * 82000;
+    if (didWin) gameTimeMs -= 18000 + seeded01(i, 5 + salt * 0.011) * 14000;
+    gameTimeMs = Math.round(clamp(gameTimeMs, 9000, 340000));
+
+    let furryMs = 26500
+      - score * 130
+      + skill.furryBias
+      - progressBonus * 120
+      + (seeded01(i, 6 + salt * 0.013) - 0.5) * 13000;
+    if (didWin) furryMs -= 2400;
+    furryMs = Math.round(clamp(furryMs, 300, 85000));
+
+    const runAt = new Date(now - i * 1.2 * 60 * 60 * 1000).toISOString();
+    runs.push({
+      id: `dummy-${i}`,
+      name: canonicalName,
+      nameKey: key,
+      score,
+      gameTimeMs,
+      furryMs,
+      rule,
+      runAt,
+      updatedAt: runAt,
+    });
+  }
+  return runs;
+}
+
+function listTopRunsFromRuns(runs, limit = 10) {
+  return [...runs].sort(compareScoreRows).slice(0, Math.max(1, Math.min(50, Number(limit) || 10)));
+}
+
 function getStoredProfile() {
   const name = (localStorage.getItem(STORAGE_KEYS.profileName) || 'Player').trim().slice(0, 24) || 'Player';
   const password = localStorage.getItem(STORAGE_KEYS.profilePassword) || '';
   return { name, password };
 }
 
-function syncProfileInputs() {
-  if (profileNameEl) profileNameEl.value = state.profile.name || '';
-  if (profilePasswordEl) profilePasswordEl.value = state.profile.password || '';
+function hasSavedProfileName() {
+  const saved = localStorage.getItem(STORAGE_KEYS.profileName);
+  return !!(saved && String(saved).trim());
 }
 
-function captureProfileFromInputs() {
-  const name = String(profileNameEl?.value || state.profile.name || 'Player').trim().replace(/\s+/g, ' ').slice(0, 24) || 'Player';
-  const password = String(profilePasswordEl?.value || '').slice(0, 128);
+function syncProfileInputs() {
+  if (profileNameEl && profileNameEl.value !== (state.profile.name || '')) profileNameEl.value = state.profile.name || '';
+  if (profilePasswordEl && profilePasswordEl.value !== (state.profile.password || '')) profilePasswordEl.value = state.profile.password || '';
+}
+
+function storeProfile(nameInput, passwordInput) {
+  const name = String(nameInput || state.profile.name || 'Player')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .slice(0, 24) || 'Player';
+  const password = String(passwordInput || '').slice(0, 128);
   state.profile.name = name;
   state.profile.password = password;
   localStorage.setItem(STORAGE_KEYS.profileName, name);
@@ -361,6 +1231,29 @@ function captureProfileFromInputs() {
   const me = state.players.find((p) => p.human);
   if (me) me.name = name;
   return { name, password };
+}
+
+function captureProfileFromInputs() {
+  const nameSource = profileNameEl ? profileNameEl.value : state.profile.name;
+  const passwordSource = profilePasswordEl ? profilePasswordEl.value : state.profile.password;
+  return storeProfile(nameSource, passwordSource);
+}
+
+function profileActionLabel() {
+  return hasSavedProfileName() ? 'Switch profile' : 'Set profile';
+}
+
+function runProfileLabel() {
+  return `Profile: ${currentProfileName()}`;
+}
+
+function setProfileEditorOpen(open) {
+  if (!profileInlineEditorEl) return;
+  const nextOpen = !!open;
+  profileInlineEditorEl.classList.toggle('isHidden', !nextOpen);
+  if (nextOpen) syncProfileInputs();
+  if (switchProfileBtn) switchProfileBtn.textContent = profileActionLabel();
+  if (runProfileNameEl) runProfileNameEl.textContent = runProfileLabel();
 }
 
 function currentProfileName() {
@@ -392,7 +1285,7 @@ function currentRunSig() {
 
 function setProfileStatus(msg) {
   state.profileStatus = msg || '';
-  if (profileStatusEl) profileStatusEl.textContent = state.profileStatus;
+  if (msg) setHighScoreStatus(msg);
 }
 
 function setHighScoreStatus(msg) {
@@ -400,46 +1293,654 @@ function setHighScoreStatus(msg) {
   if (highScoreStatusEl) highScoreStatusEl.textContent = state.highScoreStatus;
 }
 
+function activeRuleLabel() {
+  const hit = IT_TRANSFER_OPTIONS.find((opt) => opt.value === state.itTransferRule);
+  return hit?.label || state.itTransferRule || IT_TRANSFER_RULES.HYBRID;
+}
+
+function activeScoreSourceLabel() {
+  return state.scoreDataSource === SCORE_DATA_SOURCES.DUMMY ? 'dummy' : 'live';
+}
+
+function updateHighScoreTitle() {
+  if (!highScoreTitleEl) return;
+  highScoreTitleEl.textContent = `High Scores (${activeRuleLabel()} · ${activeScoreSourceLabel()})`;
+  if (scoreDataSourceEl && scoreDataSourceEl.value !== state.scoreDataSource) {
+    scoreDataSourceEl.value = state.scoreDataSource;
+  }
+}
+
+function formatRunDate(isoLike) {
+  const d = new Date(isoLike || '');
+  if (!Number.isFinite(d.getTime())) return 'Unknown date';
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  }).format(d);
+}
+
 function renderHighScores() {
   if (!highScoreRowsEl) return;
-  const sig = state.highScores.map((row, i) => `${i}:${row.name}:${row.score}:${row.gameTimeMs}:${row.furryMs}`).join('|');
+  const sig = state.highScores.map((row, i) => `${i}:${row.name}:${row.score}:${row.gameTimeMs}:${row.furryMs}:${row.runAt || row.updatedAt || ''}`).join('|');
   if (sig === highScoreSig) return;
   highScoreSig = sig;
   highScoreRowsEl.innerHTML = state.highScores.map((row, i) => {
     const gameSec = ((row.gameTimeMs || 0) / 1000).toFixed(1);
     const furrySec = ((row.furryMs || 0) / 1000).toFixed(1);
+    const runDate = formatRunDate(row.runAt || row.updatedAt);
     return `<div class="row">
       <div><b>${i + 1}. ${escapeHtml(row.name || 'Player')}</b></div>
-      <div>${Number(row.score || 0).toFixed(0)} pts · ${gameSec}s total · ${furrySec}s IT</div>
+      <div>${Number(row.score || 0).toFixed(0)} pts · ${gameSec}s total · ${furrySec}s IT · ${escapeHtml(runDate)}</div>
     </div>`;
   }).join('') || '<div class="row"><div>No scores yet.</div><div>Play a run.</div></div>';
 }
 
+function pdfValueAt(pdfValues, x) {
+  const idx = Math.round(clamp(Number(x) || 0, 0, 100));
+  if (!Array.isArray(pdfValues) || pdfValues.length < 101) return 0;
+  return clamp(Number(pdfValues[idx]) || 0, 0, 1);
+}
+
+function normalizedPdfSeries(stats) {
+  const xs = Array.isArray(stats?.pdf?.x) && stats.pdf.x.length === 101
+    ? stats.pdf.x
+    : Array.from({ length: 101 }, (_, i) => i);
+  const pdfAll = Array.isArray(stats?.pdf?.all) && stats.pdf.all.length === 101
+    ? stats.pdf.all
+    : Array.from({ length: 101 }, () => 0);
+  const pdfPlayer = Array.isArray(stats?.pdf?.player) && stats.pdf.player.length === 101
+    ? stats.pdf.player
+    : Array.from({ length: 101 }, () => 0);
+  return { xs, pdfAll, pdfPlayer };
+}
+
+function buildPdfSvg({ stats, width, height, hoverScore = null, dark = true }) {
+  const { xs, pdfAll, pdfPlayer } = normalizedPdfSeries(stats);
+  const padL = SCORE_DIST_CHART.padL;
+  const padR = SCORE_DIST_CHART.padR;
+  const padT = SCORE_DIST_CHART.padT;
+  const padB = SCORE_DIST_CHART.padB;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+  const px = (score) => padL + (clamp(score, 0, 100) / 100) * plotW;
+  const peak = Math.max(
+    0.01,
+    ...pdfAll.map((v) => Number(v) || 0),
+    ...pdfPlayer.map((v) => Number(v) || 0),
+  );
+  const yMax = peak * 1.15;
+  const py = (pdfValue) => padT + (1 - clamp((Number(pdfValue) || 0) / yMax, 0, 1)) * plotH;
+  const polyAll = xs.map((x, idx) => `${px(x).toFixed(1)},${py(pdfAll[idx]).toFixed(1)}`).join(' ');
+  const polyPlayer = xs.map((x, idx) => `${px(x).toFixed(1)},${py(pdfPlayer[idx]).toFixed(1)}`).join(' ');
+  const hoverX = hoverScore == null ? null : px(hoverScore);
+  const axisColor = dark ? 'rgba(255,255,255,.35)' : 'rgba(15,23,42,.5)';
+  const gridColor = dark ? 'rgba(255,255,255,.10)' : 'rgba(15,23,42,.12)';
+  const labelColor = dark ? 'rgba(255,255,255,.72)' : 'rgba(15,23,42,.72)';
+  const bgColor = dark ? 'rgba(255,255,255,.02)' : 'rgba(2,6,23,.03)';
+  const yTicks = [0, 0.25, 0.5, 0.75, 1];
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-label="Score PDF chart">
+      <rect x="0" y="0" width="${width}" height="${height}" fill="${bgColor}" />
+      <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${height - padB}" stroke="${axisColor}" stroke-width="1" />
+      <line x1="${padL}" y1="${height - padB}" x2="${width - padR}" y2="${height - padB}" stroke="${axisColor}" stroke-width="1" />
+      ${[0, 25, 50, 75, 100].map((tick) => {
+        const tx = px(tick).toFixed(1);
+        return `<line x1="${tx}" y1="${padT}" x2="${tx}" y2="${height - padB}" stroke="${gridColor}" stroke-width="1" />`;
+      }).join('')}
+      ${yTicks.map((tick) => {
+        const ty = py(yMax * tick).toFixed(1);
+        return `<line x1="${padL}" y1="${ty}" x2="${width - padR}" y2="${ty}" stroke="${gridColor}" stroke-width="1" />`;
+      }).join('')}
+      <polyline fill="none" stroke="rgba(96,165,250,.95)" stroke-width="2" points="${polyAll}" />
+      <polyline fill="none" stroke="rgba(34,197,94,.95)" stroke-width="2.2" points="${polyPlayer}" />
+      ${hoverX == null ? '' : `<line x1="${hoverX.toFixed(1)}" y1="${padT}" x2="${hoverX.toFixed(1)}" y2="${height - padB}" stroke="${labelColor}" stroke-width="1" stroke-dasharray="3 3" />`}
+      <text x="${padL}" y="9" fill="${labelColor}" font-size="9">PDF</text>
+      <text x="${padL + 2}" y="${padT + 11}" fill="${labelColor}" font-size="8">peak ${(peak * 100).toFixed(2)}%</text>
+      <text x="${width - padR}" y="${height - 4}" fill="${labelColor}" font-size="9" text-anchor="end">points (0-100)</text>
+    </svg>
+  `;
+}
+
+function renderScorePdf() {
+  if (!cdfChartEl || !cdfHintEl) return;
+  const stats = state.scoreStats || emptyScoreStats();
+  const hoverScore = state.scoreHoverPoint == null ? null : Math.round(clamp(state.scoreHoverPoint, 0, 100));
+  const { pdfAll, pdfPlayer } = normalizedPdfSeries(stats);
+  cdfChartEl.innerHTML = buildPdfSvg({
+    stats,
+    width: SCORE_DIST_CHART.width,
+    height: SCORE_DIST_CHART.height,
+    hoverScore,
+    dark: true,
+  });
+
+  if (!Number.isFinite(hoverScore)) {
+    cdfHintEl.textContent = `${stats.playerRuns || 0} of your runs vs ${stats.totalRuns || 0} total runs · probability density by points`;
+    return;
+  }
+
+  const allPct = (pdfValueAt(pdfAll, hoverScore) * 100).toFixed(2);
+  const mePct = (pdfValueAt(pdfPlayer, hoverScore) * 100).toFixed(2);
+  cdfHintEl.textContent = `at ${hoverScore} pts: you ${mePct}% · everyone ${allPct}%`;
+}
+
+function formatPct(value) {
+  if (!Number.isFinite(value)) return '--';
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function formatMsSeconds(value) {
+  if (!Number.isFinite(value)) return '--';
+  return `${(value / 1000).toFixed(1)}s`;
+}
+
+function formatScoreValue(value) {
+  if (!Number.isFinite(value)) return '--';
+  return Number(value).toFixed(1);
+}
+
+function formatPercentile(value) {
+  if (!Number.isFinite(value)) return '--';
+  return `p${Math.round(value)}`;
+}
+
+function renderScatterPlot() {
+  if (!scatterPlotEl || !scatterHintEl) return;
+  const analytics = state.analytics || emptyAnalytics();
+  const fallbackScatterType = parseScatterType(state.scatterKind);
+  const fallbackScatterMode = parseScatterMode(state.scatterMode);
+  const fallbackScatterWindow = parseScatterWindow(state.scatterWindow, 5);
+  const fallbackScatterRange = normalizeScatterRange(state.scatterStart, state.scatterEnd, 1, Math.max(5, fallbackScatterWindow));
+  const scatter = analytics.scatter && typeof analytics.scatter === 'object'
+    ? analytics.scatter
+    : {
+      kind: fallbackScatterType,
+      mode: fallbackScatterMode,
+      windowRuns: fallbackScatterWindow,
+      startRun: fallbackScatterRange.startRun,
+      endRun: fallbackScatterRange.endRun,
+      eligiblePlayers: 0,
+      points: [],
+    };
+  const scatterType = parseScatterType(scatter.kind || analytics.scatterKind || fallbackScatterType);
+  const scatterMode = parseScatterMode(scatter.mode || analytics.scatterMode || fallbackScatterMode);
+  const scatterWindow = parseScatterWindow(scatter.windowRuns, fallbackScatterWindow);
+  const scatterRange = normalizeScatterRange(
+    scatter.startRun ?? analytics.scatterStart,
+    scatter.endRun ?? analytics.scatterEnd,
+    fallbackScatterRange.startRun,
+    fallbackScatterRange.endRun,
+  );
+  const sampleUnit = scatterType === SCATTER_TYPES.WINNERS ? 'wins' : 'runs';
+  const scatterLabel = scatterMode === SCATTER_RANGE_MODES.BETWEEN
+    ? `${sampleUnit} ${scatterRange.startRun}-${scatterRange.endRun}`
+    : `last ${scatterWindow} ${sampleUnit}`;
+  const points = Array.isArray(scatter.points) ? scatter.points : [];
+
+  const w = SCATTER_CHART.width;
+  const h = SCATTER_CHART.height;
+  const padL = SCATTER_CHART.padL;
+  const padR = SCATTER_CHART.padR;
+  const padT = SCATTER_CHART.padT;
+  const padB = SCATTER_CHART.padB;
+  const plotW = w - padL - padR;
+  const plotH = h - padT - padB;
+  const maxXMs = Math.max(1, ...points.map((p) => Math.max(0, Number(p?.avgGameTimeMs) || 0)));
+  const maxYMs = Math.max(1, ...points.map((p) => Math.max(0, Number(p?.avgFurryMs) || 0)));
+  const px = (value) => {
+    if (scatterType === SCATTER_TYPES.WINNERS) {
+      const ratio = clamp((Number(value) || 0) / maxXMs, 0, 1);
+      return padL + (1 - ratio) * plotW;
+    }
+    return padL + (clamp(Number(value) || 0, 0, 100) / 100) * plotW;
+  };
+  const py = (value) => {
+    if (scatterType === SCATTER_TYPES.WINNERS) {
+      const ratio = clamp((Number(value) || 0) / maxYMs, 0, 1);
+      return padT + (1 - ratio) * plotH;
+    }
+    return padT + (1 - clamp(Number(value) || 0, 0, 1)) * plotH;
+  };
+
+  const base = points.map((p) => ({
+    ...p,
+    bx: scatterType === SCATTER_TYPES.WINNERS ? px(p.avgGameTimeMs) : px(p.avgScore),
+    by: scatterType === SCATTER_TYPES.WINNERS ? py(p.avgFurryMs) : py(p.avgWinRate),
+  }));
+
+  const grouped = new Map();
+  for (const p of base) {
+    const key = `${Math.round(p.bx)}|${Math.round(p.by)}`;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(p);
+  }
+
+  const laidOut = [];
+  for (const group of grouped.values()) {
+    group.sort((a, b) => String(a.nameKey || '').localeCompare(String(b.nameKey || '')));
+    const n = group.length;
+    for (let i = 0; i < n; i++) {
+      const p = group[i];
+      let ox = 0;
+      let oy = 0;
+      if (n > 1) {
+        const perRing = 8;
+        const ring = Math.floor(i / perRing);
+        const pos = i % perRing;
+        const radius = 4 + ring * 4;
+        const angle = (TAU * pos) / Math.min(perRing, n);
+        ox = Math.cos(angle) * radius;
+        oy = Math.sin(angle) * radius;
+      }
+      laidOut.push({
+        ...p,
+        x: clamp(p.bx + ox, padL + 2, w - padR - 2),
+        y: clamp(p.by + oy, padT + 2, h - padB - 2),
+        r: clamp(3 + Math.log2((p.runCount || 0) + 1), 3, 7),
+      });
+    }
+  }
+
+  state.scatterRenderedPoints = laidOut.map((p) => ({
+    nameKey: p.nameKey,
+    name: p.name,
+    x: p.x,
+    y: p.y,
+    r: p.r,
+    avgScore: p.avgScore,
+    avgWinRate: p.avgWinRate,
+    avgGameTimeMs: p.avgGameTimeMs,
+    avgFurryMs: p.avgFurryMs,
+    runCount: p.runCount,
+    sampleRuns: p.sampleRuns,
+  }));
+
+  const currentKey = normalizeNameForKey(currentProfileName());
+  const hoverKey = state.scatterHoverNameKey;
+  const circlesDrawOrder = [
+    ...laidOut.filter((p) => p.nameKey !== currentKey),
+    ...laidOut.filter((p) => p.nameKey === currentKey),
+  ];
+  const yAxisLabel = scatterType === SCATTER_TYPES.WINNERS
+    ? 'Y: selected-window avg IT time (desc)'
+    : 'Y: selected-window avg win rate';
+  const xAxisLabel = scatterType === SCATTER_TYPES.WINNERS
+    ? 'X: selected-window avg game time (desc)'
+    : 'X: selected-window avg score';
+
+  scatterPlotEl.innerHTML = `
+    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-label="Scatter plot of selected run window">
+      <rect x="0" y="0" width="${w}" height="${h}" fill="rgba(255,255,255,.02)" />
+      <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${h - padB}" stroke="rgba(255,255,255,.35)" stroke-width="1" />
+      <line x1="${padL}" y1="${h - padB}" x2="${w - padR}" y2="${h - padB}" stroke="rgba(255,255,255,.35)" stroke-width="1" />
+      ${[0, 0.25, 0.5, 0.75, 1].map((tick) => {
+        const tx = (padL + tick * plotW).toFixed(1);
+        return `<line x1="${tx}" y1="${padT}" x2="${tx}" y2="${h - padB}" stroke="rgba(255,255,255,.09)" stroke-width="1" />`;
+      }).join('')}
+      ${[0, 0.25, 0.5, 0.75, 1].map((tick) => {
+        const ty = (padT + (1 - tick) * plotH).toFixed(1);
+        return `<line x1="${padL}" y1="${ty}" x2="${w - padR}" y2="${ty}" stroke="rgba(255,255,255,.09)" stroke-width="1" />`;
+      }).join('')}
+      ${circlesDrawOrder.map((p) => {
+        const isCurrent = p.nameKey === currentKey;
+        const isHover = hoverKey && p.nameKey === hoverKey;
+        const fill = isCurrent ? 'rgba(34,197,94,.95)' : 'rgba(96,165,250,.9)';
+        const stroke = isHover ? 'rgba(255,255,255,.95)' : 'rgba(0,0,0,.35)';
+        const sw = isHover ? 2 : 1.2;
+        return `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${p.r.toFixed(1)}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" />`;
+      }).join('')}
+      <text x="${padL}" y="9" fill="rgba(255,255,255,.72)" font-size="9">${escapeHtml(yAxisLabel)}</text>
+      <text x="${w - padR}" y="${h - 4}" fill="rgba(255,255,255,.72)" font-size="9" text-anchor="end">${escapeHtml(xAxisLabel)}</text>
+    </svg>
+  `;
+
+  const hovered = state.scatterRenderedPoints.find((p) => p.nameKey === hoverKey) || null;
+  if (hovered) {
+    if (scatterType === SCATTER_TYPES.WINNERS) {
+      scatterHintEl.textContent = `${hovered.name}: avg game ${formatMsSeconds(hovered.avgGameTimeMs)} · avg IT ${formatMsSeconds(hovered.avgFurryMs)} · ${hovered.sampleRuns}/${hovered.runCount} wins · ${scatterLabel}`;
+      return;
+    }
+    scatterHintEl.textContent = `${hovered.name}: avg score ${hovered.avgScore.toFixed(1)} · avg win rate ${(hovered.avgWinRate * 100).toFixed(1)}% · ${hovered.sampleRuns}/${hovered.runCount} runs · ${scatterLabel}`;
+    return;
+  }
+
+  const scatterTypeLabel = scatterType === SCATTER_TYPES.WINNERS ? 'Winners' : 'Losers';
+  scatterHintEl.textContent = `${Number(scatter.eligiblePlayers || 0)} players shown · ${scatterTypeLabel} · ${scatterLabel} · overlap handled with radial spread for shared positions`;
+}
+
+function syncAnalyticsControls() {
+  const scatterKind = parseScatterType(state.scatterKind);
+  const isWinners = scatterKind === SCATTER_TYPES.WINNERS;
+  const summaryMode = parseScatterMode(state.summaryMode);
+  if (comparePlayersEl && comparePlayersEl.value !== state.comparePlayers) {
+    comparePlayersEl.value = state.comparePlayers;
+  }
+  if (minRunsEl) {
+    const expected = String(state.analyticsMinRuns);
+    if (minRunsEl.value !== expected) minRunsEl.value = expected;
+  }
+  if (summaryModeEl) {
+    const expected = summaryMode;
+    if (summaryModeEl.value !== expected) summaryModeEl.value = expected;
+  }
+  if (summaryWindowEl) {
+    const expected = String(state.summaryWindow);
+    if (summaryWindowEl.value !== expected) summaryWindowEl.value = expected;
+  }
+  if (summaryRunStartEl) {
+    const expected = String(state.summaryStart);
+    if (summaryRunStartEl.value !== expected) summaryRunStartEl.value = expected;
+  }
+  if (summaryRunEndEl) {
+    const expected = String(state.summaryEnd);
+    if (summaryRunEndEl.value !== expected) summaryRunEndEl.value = expected;
+  }
+  if (summaryWindowLabelEl) summaryWindowLabelEl.textContent = 'Run count';
+  if (summaryRunStartLabelEl) summaryRunStartLabelEl.textContent = 'Run';
+  if (summaryRunEndLabelEl) summaryRunEndLabelEl.textContent = 'Run';
+  if (scatterWindowEl) {
+    const expected = String(state.scatterWindow);
+    if (scatterWindowEl.value !== expected) scatterWindowEl.value = expected;
+  }
+  if (scatterTypeEl) {
+    const expected = scatterKind;
+    if (scatterTypeEl.value !== expected) scatterTypeEl.value = expected;
+  }
+  if (scatterModeEl?.options?.length >= 2) {
+    const expectedLast = isWinners ? 'Last N wins' : 'Last N runs';
+    const expectedBetween = isWinners ? 'Between win N and M' : 'Between run N and M';
+    if (scatterModeEl.options[0].text !== expectedLast) scatterModeEl.options[0].text = expectedLast;
+    if (scatterModeEl.options[1].text !== expectedBetween) scatterModeEl.options[1].text = expectedBetween;
+  }
+  if (scatterRunStartLabelEl) scatterRunStartLabelEl.textContent = isWinners ? 'Win' : 'Run';
+  if (scatterRunEndLabelEl) scatterRunEndLabelEl.textContent = isWinners ? 'Win' : 'Run';
+  if (scatterWindowLabelEl) scatterWindowLabelEl.textContent = isWinners ? 'Win count' : 'Run count';
+  if (scatterModeEl) {
+    const expected = parseScatterMode(state.scatterMode);
+    if (scatterModeEl.value !== expected) scatterModeEl.value = expected;
+  }
+  if (scatterRunStartEl) {
+    const expected = String(state.scatterStart);
+    if (scatterRunStartEl.value !== expected) scatterRunStartEl.value = expected;
+  }
+  if (scatterRunEndEl) {
+    const expected = String(state.scatterEnd);
+    if (scatterRunEndEl.value !== expected) scatterRunEndEl.value = expected;
+  }
+  const betweenMode = parseScatterMode(state.scatterMode) === SCATTER_RANGE_MODES.BETWEEN;
+  const summaryBetweenMode = summaryMode === SCATTER_RANGE_MODES.BETWEEN;
+  if (summaryWindowEl) summaryWindowEl.disabled = summaryBetweenMode;
+  if (summaryRunStartEl) summaryRunStartEl.disabled = !summaryBetweenMode;
+  if (summaryRunEndEl) summaryRunEndEl.disabled = !summaryBetweenMode;
+  if (summaryRangeLastEl) summaryRangeLastEl.classList.toggle('isHidden', summaryBetweenMode);
+  if (summaryRangeBetweenEl) summaryRangeBetweenEl.classList.toggle('isHidden', !summaryBetweenMode);
+  if (scatterWindowEl) scatterWindowEl.disabled = betweenMode;
+  if (scatterRunStartEl) scatterRunStartEl.disabled = !betweenMode;
+  if (scatterRunEndEl) scatterRunEndEl.disabled = !betweenMode;
+  if (scatterRangeLastEl) scatterRangeLastEl.classList.toggle('isHidden', betweenMode);
+  if (scatterRangeBetweenEl) scatterRangeBetweenEl.classList.toggle('isHidden', !betweenMode);
+}
+
+function renderAnalytics() {
+  const analytics = state.analytics || emptyAnalytics();
+  const summary = analytics.summary && typeof analytics.summary === 'object' ? analytics.summary : null;
+  syncAnalyticsControls();
+
+  if (analyticsCardsEl) {
+    const current = summary?.current || analytics.current || {};
+    const everyone = summary?.everyone || analytics.everyone || {};
+    const p = summary?.currentPercentiles || analytics.currentPercentiles || {};
+    const qualifiedPlayers = Math.max(0, Number(summary?.totalPlayers || 0));
+    const qualifiedText = `${qualifiedPlayers} qualifying players`;
+    analyticsCardsEl.innerHTML = [
+      {
+        label: '1) Win Rate',
+        current: formatPct(current.winRate),
+        currentMeta: `${Number(current.winCount || 0)}/${Number(current.totalRuns || 0)} wins · ${formatPercentile(p.winRate)} percentile`,
+        everyone: formatPct(everyone.winRate),
+        everyoneMeta: `${Number(everyone.winCount || 0)}/${Number(everyone.totalRuns || 0)} wins · ${qualifiedText}`,
+      },
+      {
+        label: '2) Non-Win Score',
+        current: `${formatScoreValue(current.medianNonWinScore)} median`,
+        currentMeta: `${Number(current.nonWinCount || 0)} non-wins · ${formatPercentile(p.nonWinScore)} percentile`,
+        everyone: `${formatScoreValue(everyone.medianNonWinScore)} median`,
+        everyoneMeta: qualifiedText,
+      },
+      {
+        label: '3) Win Time',
+        current: `${formatMsSeconds(current.medianWinTimeMs)} median`,
+        currentMeta: `${Number(current.winCount || 0)} wins · ${formatPercentile(p.winTime)} percentile`,
+        everyone: `${formatMsSeconds(everyone.medianWinTimeMs)} median`,
+        everyoneMeta: qualifiedText,
+      },
+    ].map((card) => `<div class="analyticsMetric">
+      <div class="analyticsMetricTitle">${escapeHtml(card.label)}</div>
+      <div class="analyticsMetricRow"><span>You</span><b>${escapeHtml(card.current)}</b></div>
+      <div class="analyticsMetricSub">${escapeHtml(card.currentMeta)}</div>
+      <div class="analyticsMetricRow"><span>Everyone</span><b>${escapeHtml(card.everyone)}</b></div>
+      <div class="analyticsMetricSub">${escapeHtml(card.everyoneMeta)}</div>
+    </div>`).join('');
+  }
+
+  if (analyticsRowsEl) {
+    const rows = Array.isArray(analytics.compared) ? analytics.compared : [];
+    analyticsRowsEl.innerHTML = rows.map((row, i) => {
+      const lowN = row.meetsMinRuns ? '' : ' <span class="lowN">low n</span>';
+      return `<div class="row analyticsRow">
+        <div><b>${i + 1}. ${escapeHtml(row.name || 'Player')}</b>${lowN}</div>
+        <div>${Number(row.totalRuns || 0)} runs · ${formatPct(row.winRate)} win · ${formatMsSeconds(row.medianWinTimeMs)} win time · ${formatScoreValue(row.medianNonWinScore)} non-win</div>
+      </div>`;
+    }).join('') || '<div class="row analyticsRow"><div>No players match this filter.</div><div>Try lowering min runs.</div></div>';
+  }
+
+  if (analyticsStatusEl) {
+    const summaryMode = parseScatterMode(summary?.mode || state.summaryMode);
+    const summaryWindow = parseScatterWindow(summary?.windowRuns, state.summaryWindow || 20);
+    const summaryRange = normalizeScatterRange(
+      summary?.startRun ?? state.summaryStart,
+      summary?.endRun ?? state.summaryEnd,
+      state.summaryStart || 1,
+      state.summaryEnd || Math.max(20, summaryWindow),
+    );
+    const summaryLabel = summaryMode === SCATTER_RANGE_MODES.BETWEEN
+      ? `summary runs ${summaryRange.startRun}-${summaryRange.endRun}`
+      : `summary last ${summaryWindow} runs`;
+    analyticsStatusEl.textContent = `Compared ${Number(analytics.compared?.length || 0)} players · min runs ${Number(analytics.minRuns || state.analyticsMinRuns || 5)} · ${Number(analytics.totalRuns || 0)} runs total · ${summaryLabel}`;
+  }
+}
+
+function applyAnalyticsFilters({ includePlayerComparison = true } = {}) {
+  const nextPlayers = includePlayerComparison
+    ? sanitizeComparePlayers(comparePlayersEl?.value || state.comparePlayers)
+    : sanitizeComparePlayers(state.comparePlayers);
+  const nextMinRuns = includePlayerComparison
+    ? parseMinRuns(minRunsEl?.value, state.analyticsMinRuns || 5)
+    : parseMinRuns(state.analyticsMinRuns, 5);
+  const nextSummaryMode = parseScatterMode(summaryModeEl?.value || state.summaryMode);
+  const nextSummaryWindow = parseScatterWindow(summaryWindowEl?.value, state.summaryWindow || 20);
+  const nextSummaryRange = normalizeScatterRange(
+    summaryRunStartEl?.value ?? state.summaryStart,
+    summaryRunEndEl?.value ?? state.summaryEnd,
+    state.summaryStart || 1,
+    state.summaryEnd || Math.max(20, nextSummaryWindow),
+  );
+  const nextScatterKind = parseScatterType(scatterTypeEl?.value || state.scatterKind);
+  const nextScatterMode = parseScatterMode(scatterModeEl?.value || state.scatterMode);
+  const nextScatterWindow = parseScatterWindow(scatterWindowEl?.value, state.scatterWindow || 5);
+  const nextScatterRange = normalizeScatterRange(
+    scatterRunStartEl?.value ?? state.scatterStart,
+    scatterRunEndEl?.value ?? state.scatterEnd,
+    state.scatterStart || 1,
+    state.scatterEnd || Math.max(5, nextScatterWindow),
+  );
+  state.comparePlayers = nextPlayers;
+  state.analyticsMinRuns = nextMinRuns;
+  state.summaryMode = nextSummaryMode;
+  state.summaryWindow = nextSummaryWindow;
+  state.summaryStart = nextSummaryRange.startRun;
+  state.summaryEnd = nextSummaryRange.endRun;
+  state.scatterKind = nextScatterKind;
+  state.scatterMode = nextScatterMode;
+  state.scatterWindow = nextScatterWindow;
+  state.scatterStart = nextScatterRange.startRun;
+  state.scatterEnd = nextScatterRange.endRun;
+  state.scatterHoverNameKey = null;
+  if (includePlayerComparison) {
+    localStorage.setItem(STORAGE_KEYS.comparePlayers, nextPlayers);
+    localStorage.setItem(STORAGE_KEYS.analyticsMinRuns, String(nextMinRuns));
+  }
+  localStorage.setItem(STORAGE_KEYS.summaryMode, nextSummaryMode);
+  localStorage.setItem(STORAGE_KEYS.summaryWindow, String(nextSummaryWindow));
+  localStorage.setItem(STORAGE_KEYS.summaryStartRun, String(nextSummaryRange.startRun));
+  localStorage.setItem(STORAGE_KEYS.summaryEndRun, String(nextSummaryRange.endRun));
+  localStorage.setItem(STORAGE_KEYS.scatterType, nextScatterKind);
+  localStorage.setItem(STORAGE_KEYS.scatterMode, nextScatterMode);
+  localStorage.setItem(STORAGE_KEYS.scatterWindow, String(nextScatterWindow));
+  localStorage.setItem(STORAGE_KEYS.scatterStartRun, String(nextScatterRange.startRun));
+  localStorage.setItem(STORAGE_KEYS.scatterEndRun, String(nextScatterRange.endRun));
+  syncAnalyticsControls();
+  refreshHighScores();
+}
+
+let nonComparisonAutoApplyTimer = 0;
+function applyNonComparisonFiltersNow() {
+  if (nonComparisonAutoApplyTimer) {
+    clearTimeout(nonComparisonAutoApplyTimer);
+    nonComparisonAutoApplyTimer = 0;
+  }
+  applyAnalyticsFilters({ includePlayerComparison: false });
+}
+
+function scheduleNonComparisonAutoApply(delayMs = 180) {
+  if (nonComparisonAutoApplyTimer) clearTimeout(nonComparisonAutoApplyTimer);
+  nonComparisonAutoApplyTimer = setTimeout(() => {
+    nonComparisonAutoApplyTimer = 0;
+    applyAnalyticsFilters({ includePlayerComparison: false });
+  }, delayMs);
+}
+
 async function refreshHighScores() {
-  try {
-    const data = await apiFetch('/api/highscores?limit=10');
-    state.highScores = Array.isArray(data.scores) ? data.scores : [];
+  const rule = state.itTransferRule || IT_TRANSFER_RULES.HYBRID;
+  const myName = currentProfileName();
+  const minRuns = parseMinRuns(state.analyticsMinRuns, 5);
+  const summaryMode = parseScatterMode(state.summaryMode);
+  const summaryWindow = parseScatterWindow(state.summaryWindow, 20);
+  const summaryRange = normalizeScatterRange(state.summaryStart, state.summaryEnd, 1, Math.max(20, summaryWindow));
+  const scatterKind = parseScatterType(state.scatterKind);
+  const scatterMode = parseScatterMode(state.scatterMode);
+  const scatterWindow = parseScatterWindow(state.scatterWindow, 5);
+  const scatterRange = normalizeScatterRange(state.scatterStart, state.scatterEnd, 1, Math.max(5, scatterWindow));
+  const comparePlayers = sanitizeComparePlayers(state.comparePlayers);
+  state.analyticsMinRuns = minRuns;
+  state.summaryMode = summaryMode;
+  state.summaryWindow = summaryWindow;
+  state.summaryStart = summaryRange.startRun;
+  state.summaryEnd = summaryRange.endRun;
+  state.scatterKind = scatterKind;
+  state.scatterMode = scatterMode;
+  state.scatterWindow = scatterWindow;
+  state.scatterStart = scatterRange.startRun;
+  state.scatterEnd = scatterRange.endRun;
+  state.comparePlayers = comparePlayers;
+  syncAnalyticsControls();
+  if (state.scoreDataSource === SCORE_DATA_SOURCES.DUMMY) {
+    state.dummyRuns = makeDummyRuns(myName);
+    const filteredRuns = state.dummyRuns.filter((run) => run.rule === rule);
+    state.highScores = listTopRunsFromRuns(filteredRuns, 10);
+    state.scoreStats = buildScoreStatsFromRuns(filteredRuns, myName);
+    state.analytics = buildAnalyticsFromRuns(filteredRuns, {
+      currentName: myName,
+      comparePlayers,
+      minRuns,
+      limit: 8,
+      summaryN: summaryWindow,
+      summaryMode,
+      summaryStart: summaryRange.startRun,
+      summaryEnd: summaryRange.endRun,
+      scatterKind,
+      scatterN: scatterWindow,
+      scatterMode,
+      scatterStart: scatterRange.startRun,
+      scatterEnd: scatterRange.endRun,
+    });
     renderHighScores();
-    if (!state.highScoreStatus) setHighScoreStatus('Best local-browser runs saved on the server.');
+    renderScorePdf();
+    renderAnalytics();
+    renderScatterPlot();
+    setHighScoreStatus(`Showing dummy local test data for "${activeRuleLabel()}".`);
+    return;
+  }
+
+  try {
+    const ruleQuery = encodeURIComponent(rule);
+    const nameQuery = encodeURIComponent(myName);
+    const playersQuery = encodeURIComponent(comparePlayers);
+    const summaryModeQuery = encodeURIComponent(summaryMode);
+    const scatterKindQuery = encodeURIComponent(scatterKind);
+    const scatterModeQuery = encodeURIComponent(scatterMode);
+    const [scoreResult, analyticsResult] = await Promise.allSettled([
+      apiFetch(`/api/highscores?limit=10&rule=${ruleQuery}&name=${nameQuery}`),
+      apiFetch(`/api/analytics?rule=${ruleQuery}&name=${nameQuery}&players=${playersQuery}&minRuns=${minRuns}&limit=8&summaryN=${summaryWindow}&summaryMode=${summaryModeQuery}&summaryStart=${summaryRange.startRun}&summaryEnd=${summaryRange.endRun}&scatterKind=${scatterKindQuery}&scatterN=${scatterWindow}&scatterMode=${scatterModeQuery}&scatterStart=${scatterRange.startRun}&scatterEnd=${scatterRange.endRun}`),
+    ]);
+    if (scoreResult.status !== 'fulfilled') throw scoreResult.reason;
+    const scoreData = scoreResult.value;
+    state.highScores = Array.isArray(scoreData.scores) ? scoreData.scores : [];
+    state.scoreStats = scoreData?.stats && typeof scoreData.stats === 'object'
+      ? scoreData.stats
+      : buildScoreStatsFromRuns(state.highScores, myName);
+    state.analytics = analyticsResult.status === 'fulfilled'
+      && analyticsResult.value?.analytics
+      && typeof analyticsResult.value.analytics === 'object'
+      ? analyticsResult.value.analytics
+      : buildAnalyticsFromRuns(state.highScores, {
+        currentName: myName,
+        comparePlayers,
+        minRuns,
+        limit: 8,
+        summaryN: summaryWindow,
+        summaryMode,
+        summaryStart: summaryRange.startRun,
+        summaryEnd: summaryRange.endRun,
+        scatterKind,
+        scatterN: scatterWindow,
+        scatterMode,
+        scatterStart: scatterRange.startRun,
+        scatterEnd: scatterRange.endRun,
+      });
+    renderHighScores();
+    renderScorePdf();
+    renderAnalytics();
+    renderScatterPlot();
+    setHighScoreStatus(`Showing top 10 for "${activeRuleLabel()}" from ${state.scoreStats?.totalRuns || 0} saved runs.`);
   } catch (err) {
     state.highScores = [];
+    state.scoreStats = emptyScoreStats();
+    state.analytics = emptyAnalytics();
     renderHighScores();
+    renderScorePdf();
+    renderAnalytics();
+    renderScatterPlot();
     setHighScoreStatus(err.message || 'Unable to load high scores.');
   }
 }
 
-async function saveProfile() {
-  const { name, password } = captureProfileFromInputs();
+async function saveProfile(profileOverride = null) {
+  const { name, password } = profileOverride
+    ? storeProfile(profileOverride.name, profileOverride.password)
+    : captureProfileFromInputs();
   try {
     const data = await apiFetch('/api/profile', {
       method: 'POST',
       body: JSON.stringify({ name, password }),
     });
-    state.profile.name = data.profile?.name || name;
+    const savedName = data.profile?.name || name;
+    storeProfile(savedName, password);
     setProfileStatus(data.profile?.claimed
       ? 'Profile saved. This name is password-protected.'
       : 'Profile saved. This name is still unprotected.');
-    syncProfileInputs();
     await refreshHighScores();
   } catch (err) {
     setProfileStatus(err.message || 'Unable to save profile.');
@@ -447,6 +1948,10 @@ async function saveProfile() {
 }
 
 async function submitHighScore() {
+  if (state.scoreDataSource === SCORE_DATA_SOURCES.DUMMY) {
+    setHighScoreStatus('Switch score data to "live" to submit runs to the server.');
+    return;
+  }
   const payload = currentRunScorePayload();
   if (!payload) {
     setHighScoreStatus('Finish a run before submitting a score.');
@@ -461,19 +1966,56 @@ async function submitHighScore() {
       body: JSON.stringify(payload),
     });
     state.highScores = Array.isArray(data.scores) ? data.scores : state.highScores;
+    state.scoreStats = data?.stats && typeof data.stats === 'object'
+      ? data.stats
+      : state.scoreStats;
+    state.analytics = data?.analytics && typeof data.analytics === 'object'
+      ? data.analytics
+      : state.analytics;
     renderHighScores();
+    renderScorePdf();
+    renderAnalytics();
+    renderScatterPlot();
     state.lastSubmittedRunSig = currentRunSig();
-    setHighScoreStatus(data.improved
-      ? `Score saved. Current rank: #${data.rank || '?'}`
-      : `Run submitted. Best saved rank remains #${data.rank || '?'}.`);
+    const rankMsg = `Run saved. Current rank: #${data.rank || '?'}.`;
+    await refreshHighScores();
+    setHighScoreStatus(rankMsg);
   } catch (err) {
     setHighScoreStatus(err.message || 'Unable to submit score.');
   }
 }
 
+async function autoSubmitIfEligible() {
+  if (state.scoreDataSource !== SCORE_DATA_SOURCES.LIVE) return;
+  const runSig = currentRunSig();
+  if (!runSig) return;
+  if (state.lastSubmittedRunSig === runSig) return;
+  if (state.lastAutoSubmitAttemptSig === runSig || state.autoSubmitInFlight) return;
+  const rawName = String(state.profile.name ?? '').trim();
+  if (!rawName) return;
+
+  state.lastAutoSubmitAttemptSig = runSig;
+  state.autoSubmitInFlight = true;
+  try {
+    await submitHighScore();
+  } finally {
+    state.autoSubmitInFlight = false;
+  }
+}
+
 // Input
 const keys = new Set();
+
+function isTextEntryTarget(target) {
+  if (!target || typeof target !== 'object') return false;
+  if (target.isContentEditable) return true;
+  const el = target;
+  const tag = String(el.tagName || '').toLowerCase();
+  return tag === 'input' || tag === 'textarea' || tag === 'select';
+}
+
 window.addEventListener('keydown', (e) => {
+  if (isTextEntryTarget(e.target)) return;
   if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','w','a','s','d','W','A','S','D',' '].includes(e.key)) e.preventDefault();
   keys.add(e.key);
 });
@@ -496,6 +2038,7 @@ function clearKeys() {
   state.wasSpaceDown = false;
   state.spaceDownAt = 0;
 }
+
 window.addEventListener('blur', clearKeys);
 document.addEventListener('visibilitychange', () => { if (document.hidden) clearKeys(); });
 window.addEventListener('focus', clearKeys);
@@ -559,7 +2102,27 @@ const state = {
   profileStatus: '',
   highScores: [],
   highScoreStatus: '',
+  scoreStats: emptyScoreStats(),
+  analytics: emptyAnalytics(),
+  comparePlayers: getStoredComparePlayers(),
+  analyticsMinRuns: getStoredMinRuns(),
+  summaryMode: getStoredSummaryMode(),
+  summaryWindow: getStoredSummaryWindow(),
+  summaryStart: getStoredSummaryStartRun(),
+  summaryEnd: getStoredSummaryEndRun(),
+  scatterKind: getStoredScatterType(),
+  scatterMode: getStoredScatterMode(),
+  scatterWindow: getStoredScatterWindow(),
+  scatterStart: getStoredScatterStartRun(),
+  scatterEnd: getStoredScatterEndRun(),
+  scoreDataSource: getInitialScoreDataSource(),
+  scoreHoverPoint: null,
+  scatterHoverNameKey: null,
+  scatterRenderedPoints: [],
+  dummyRuns: [],
   lastSubmittedRunSig: null,
+  lastAutoSubmitAttemptSig: null,
+  autoSubmitInFlight: false,
   gameTimeMs: 0,
 
   players: [],
@@ -617,6 +2180,8 @@ function resetGameOffline() {
   state.nowMs = performance.now();
   state.lastT = performance.now();
   state.lastSubmittedRunSig = null;
+  state.lastAutoSubmitAttemptSig = null;
+  state.autoSubmitInFlight = false;
   state.gameTimeMs = 0;
 
   state.players = [makePlayer('me', currentProfileName(), true)];
@@ -1545,6 +3110,7 @@ function updateOffline(dt) {
     if (p.score >= WIN_POINTS && !state.over) {
       state.over = true;
       state.winnerId = p.id;
+      void autoSubmitIfEligible();
     }
   }
 
@@ -1720,9 +3286,11 @@ function draw() {
   if (!state.mode) {
     overlayEl?.classList.add('on');
     if (endTitleEl) endTitleEl.textContent = 'The Furry One';
-    if (endSubEl) endSubEl.textContent = 'Play offline, chase a best score, and optionally protect your name with a password.';
+    if (endSubEl) endSubEl.textContent = 'Get furry by being closest to, but not IT';
     if (endRowsEl) endRowsEl.innerHTML = '';
     if (playOfflineBtn) playOfflineBtn.textContent = 'Start run';
+    if (switchProfileBtn) switchProfileBtn.textContent = profileActionLabel();
+    if (runProfileNameEl) runProfileNameEl.textContent = runProfileLabel();
     if (scoreActionsEl) scoreActionsEl.style.display = 'none';
   } else if (state.mode === 'offline' && state.over && state.winnerId) {
     overlayEl?.classList.add('on');
@@ -1732,10 +3300,16 @@ function draw() {
     if (endSubEl) endSubEl.textContent = `First to ${WIN_POINTS} points in ${runSec}s. Press Enter or Reset.`;
     if (playOfflineBtn) playOfflineBtn.textContent = 'Play again';
     if (scoreActionsEl) scoreActionsEl.style.display = 'flex';
+    if (switchProfileBtn) {
+      switchProfileBtn.textContent = profileActionLabel();
+    }
+    if (runProfileNameEl) runProfileNameEl.textContent = runProfileLabel();
     if (submitHighScoreBtn) {
-      const alreadySubmitted = currentRunSig() && state.lastSubmittedRunSig === currentRunSig();
-      submitHighScoreBtn.disabled = !!alreadySubmitted;
-      submitHighScoreBtn.textContent = alreadySubmitted ? 'Score submitted' : 'Submit score';
+      const runSig = currentRunSig();
+      const alreadySubmitted = runSig && state.lastSubmittedRunSig === runSig;
+      const autoSubmitting = runSig && state.autoSubmitInFlight && state.lastAutoSubmitAttemptSig === runSig;
+      submitHighScoreBtn.disabled = !!alreadySubmitted || !!autoSubmitting;
+      submitHighScoreBtn.textContent = alreadySubmitted ? 'Score submitted' : (autoSubmitting ? 'Submitting...' : 'Submit score');
     }
     if (endRowsEl) {
       const sorted = [...state.players].sort((a,b) => (b.score||0) - (a.score||0));
@@ -1748,6 +3322,7 @@ function draw() {
     }
   } else {
     overlayEl?.classList.remove('on');
+    setProfileEditorOpen(false);
   }
 
   // background
@@ -1985,22 +3560,200 @@ playOfflineBtn?.addEventListener('click', () => {
   resetGameOffline();
 });
 
+switchProfileBtn?.addEventListener('click', () => {
+  const isOpen = !!(profileInlineEditorEl && !profileInlineEditorEl.classList.contains('isHidden'));
+  setProfileEditorOpen(!isOpen);
+  if (!isOpen && profileNameEl) profileNameEl.focus();
+});
+
 saveProfileBtn?.addEventListener('click', () => {
   saveProfile();
 });
 
 clearPasswordBtn?.addEventListener('click', () => {
+  if (profilePasswordEl) profilePasswordEl.value = '';
   state.profile.password = '';
   localStorage.removeItem(STORAGE_KEYS.profilePassword);
-  if (profilePasswordEl) profilePasswordEl.value = '';
   setProfileStatus('Stored password cleared in this browser.');
+});
+
+profileNameEl?.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  saveProfile();
+});
+
+profilePasswordEl?.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  saveProfile();
 });
 
 submitHighScoreBtn?.addEventListener('click', () => {
   submitHighScore();
 });
 
+applyAnalyticsBtn?.addEventListener('click', () => {
+  applyAnalyticsFilters();
+});
+
+comparePlayersEl?.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  applyAnalyticsFilters();
+});
+
+minRunsEl?.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  applyAnalyticsFilters();
+});
+
+summaryModeEl?.addEventListener('change', () => {
+  applyNonComparisonFiltersNow();
+});
+
+summaryWindowEl?.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  applyNonComparisonFiltersNow();
+});
+summaryWindowEl?.addEventListener('input', () => {
+  scheduleNonComparisonAutoApply();
+});
+summaryWindowEl?.addEventListener('change', () => {
+  applyNonComparisonFiltersNow();
+});
+
+summaryRunStartEl?.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  applyNonComparisonFiltersNow();
+});
+summaryRunStartEl?.addEventListener('input', () => {
+  scheduleNonComparisonAutoApply();
+});
+summaryRunStartEl?.addEventListener('change', () => {
+  applyNonComparisonFiltersNow();
+});
+
+summaryRunEndEl?.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  applyNonComparisonFiltersNow();
+});
+summaryRunEndEl?.addEventListener('input', () => {
+  scheduleNonComparisonAutoApply();
+});
+summaryRunEndEl?.addEventListener('change', () => {
+  applyNonComparisonFiltersNow();
+});
+
+scatterTypeEl?.addEventListener('change', () => {
+  applyNonComparisonFiltersNow();
+});
+
+scatterModeEl?.addEventListener('change', () => {
+  applyNonComparisonFiltersNow();
+});
+
+scatterWindowEl?.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  applyNonComparisonFiltersNow();
+});
+scatterWindowEl?.addEventListener('input', () => {
+  scheduleNonComparisonAutoApply();
+});
+scatterWindowEl?.addEventListener('change', () => {
+  applyNonComparisonFiltersNow();
+});
+
+scatterRunStartEl?.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  applyNonComparisonFiltersNow();
+});
+scatterRunStartEl?.addEventListener('input', () => {
+  scheduleNonComparisonAutoApply();
+});
+scatterRunStartEl?.addEventListener('change', () => {
+  applyNonComparisonFiltersNow();
+});
+
+scatterRunEndEl?.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  applyNonComparisonFiltersNow();
+});
+scatterRunEndEl?.addEventListener('input', () => {
+  scheduleNonComparisonAutoApply();
+});
+scatterRunEndEl?.addEventListener('change', () => {
+  applyNonComparisonFiltersNow();
+});
+
+scoreDataSourceEl?.addEventListener('change', () => {
+  state.scoreDataSource = parseScoreDataSource(scoreDataSourceEl.value);
+  localStorage.setItem(STORAGE_KEYS.scoreDataSource, state.scoreDataSource);
+  state.scoreHoverPoint = null;
+  state.scatterHoverNameKey = null;
+  highScoreSig = null;
+  updateHighScoreTitle();
+  refreshHighScores();
+});
+
+cdfChartEl?.addEventListener('mousemove', (e) => {
+  const rect = cdfChartEl.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return;
+  const plotLeft = (SCORE_DIST_CHART.padL / SCORE_DIST_CHART.width) * rect.width;
+  const plotRight = rect.width - (SCORE_DIST_CHART.padR / SCORE_DIST_CHART.width) * rect.width;
+  const plotWidth = Math.max(1, plotRight - plotLeft);
+  const x = clamp(e.clientX - rect.left, plotLeft, plotRight);
+  const score = ((x - plotLeft) / plotWidth) * 100;
+  const rounded = Math.round(clamp(score, 0, 100));
+  if (rounded === state.scoreHoverPoint) return;
+  state.scoreHoverPoint = rounded;
+  renderScorePdf();
+});
+
+cdfChartEl?.addEventListener('mouseleave', () => {
+  if (state.scoreHoverPoint == null) return;
+  state.scoreHoverPoint = null;
+  renderScorePdf();
+});
+
+scatterPlotEl?.addEventListener('mousemove', (e) => {
+  const rect = scatterPlotEl.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return;
+  const sx = ((e.clientX - rect.left) / rect.width) * SCATTER_CHART.width;
+  const sy = ((e.clientY - rect.top) / rect.height) * SCATTER_CHART.height;
+  let best = null;
+  let bestD2 = Infinity;
+  for (const p of state.scatterRenderedPoints || []) {
+    const dx = sx - p.x;
+    const dy = sy - p.y;
+    const d2 = dx * dx + dy * dy;
+    const hitR = Math.max(9, (p.r || 3) + 3);
+    if (d2 <= hitR * hitR && d2 < bestD2) {
+      best = p;
+      bestD2 = d2;
+    }
+  }
+  const next = best?.nameKey || null;
+  if (next === state.scatterHoverNameKey) return;
+  state.scatterHoverNameKey = next;
+  renderScatterPlot();
+});
+
+scatterPlotEl?.addEventListener('mouseleave', () => {
+  if (!state.scatterHoverNameKey) return;
+  state.scatterHoverNameKey = null;
+  renderScatterPlot();
+});
+
 window.addEventListener('keydown', (e) => {
+  if (isTextEntryTarget(e.target)) return;
   if (e.key === 'Enter' && state.over) {
     state.mode = 'offline';
     resetGameOffline();
@@ -2009,9 +3762,14 @@ window.addEventListener('keydown', (e) => {
 
 resize();
 syncProfileInputs();
+setProfileEditorOpen(false);
+updateHighScoreTitle();
 setProfileStatus('');
 setHighScoreStatus('Loading high scores…');
 renderHighScores();
+renderScorePdf();
+renderAnalytics();
+renderScatterPlot();
 resetGameOffline();
 state.mode = null;
 state.online = false;

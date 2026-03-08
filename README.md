@@ -73,7 +73,49 @@ Otherwise, deploy the client separately (static site) and point it at the server
 - Passwords are stored server-side as hashes.
 
 ### High Score Ranking
+All submitted runs are stored (not only each player's best run).
+
+High scores are shown separately per IT rule (`hybrid`, `throw-only`, `tag-only`), and each table is the top runs for that rule.
+
 Scores are ranked by:
 1) higher total points
 2) lower total game time
 3) lower time spent as IT
+
+### Score Distribution Chart
+The high score modal includes an interactive PDF (probability density function) chart (x-axis: points 0-100):
+- blue line: score density for everyone
+- green line: score density for the current profile name
+
+Hover the chart to compare density at an exact score (`N points`).
+
+### Player Analytics (Min Runs Filter)
+The score card now includes comparison analytics across three core questions:
+1) when a player wins (`100 pts`), how long it takes (median win time)
+2) how often they win (win rate)
+3) when they do not win, what score they usually get (median non-win score)
+
+Use:
+- `Compare` input: comma-separated player names (example: `alice,bob,yoyoyo`)
+- `Min Runs`: default `5` (players below threshold are marked `low n`)
+
+When no compare names are entered, the app auto-shows top comparable players who meet the run threshold.
+
+### Scatter Plot (Run Window)
+The score card includes a `Scatter Plot` section:
+- each dot: one player
+- `Losers` mode: X axis is average score over selected runs; Y axis is average win rate over selected runs
+- `Winners` mode: X axis is average game time over selected wins (descending); Y axis is average IT time over selected wins (descending)
+
+Window options:
+- `Last N ...` (runs for Losers, wins for Winners; default `N=5`)
+- `Between ... N and M` (inclusive, by each player's ordered history of runs/wins for the selected type)
+
+If multiple players land in the same plotted position, dots are radially spread so overlaps remain visible.
+
+### Dummy Local Test Data
+Use local dummy score data by opening the app with:
+```bash
+http://localhost:5173/?dummyScores=1
+```
+Or switch the "Data" selector in the high score card to `dummy (local test)`.
