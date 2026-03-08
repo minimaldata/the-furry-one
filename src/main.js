@@ -285,7 +285,7 @@ app.innerHTML = `
             <input id="profilePassword" class="field" type="password" maxlength="128" placeholder="Optional password" />
           </div>
           <div class="actions profileInlineActions">
-            <button class="btn" id="saveProfile" type="button">Save profile</button>
+            <button class="btn" id="saveProfile" type="button">Log in</button>
             <button class="btn" id="clearPassword" type="button">Clear password</button>
           </div>
         </div>
@@ -1217,12 +1217,17 @@ function syncProfileInputs() {
   if (profilePasswordEl && profilePasswordEl.value !== (state.profile.password || '')) profilePasswordEl.value = state.profile.password || '';
 }
 
-function storeProfile(nameInput, passwordInput) {
+function normalizeProfileInput(nameInput, passwordInput) {
   const name = String(nameInput || state.profile.name || 'Player')
     .trim()
     .replace(/\s+/g, ' ')
     .slice(0, 24) || 'Player';
   const password = String(passwordInput || '').slice(0, 128);
+  return { name, password };
+}
+
+function storeProfile(nameInput, passwordInput) {
+  const { name, password } = normalizeProfileInput(nameInput, passwordInput);
   state.profile.name = name;
   state.profile.password = password;
   localStorage.setItem(STORAGE_KEYS.profileName, name);
@@ -1236,7 +1241,7 @@ function storeProfile(nameInput, passwordInput) {
 function captureProfileFromInputs() {
   const nameSource = profileNameEl ? profileNameEl.value : state.profile.name;
   const passwordSource = profilePasswordEl ? profilePasswordEl.value : state.profile.password;
-  return storeProfile(nameSource, passwordSource);
+  return normalizeProfileInput(nameSource, passwordSource);
 }
 
 function profileActionLabel() {
@@ -1928,9 +1933,10 @@ async function refreshHighScores() {
 }
 
 async function saveProfile(profileOverride = null) {
-  const { name, password } = profileOverride
-    ? storeProfile(profileOverride.name, profileOverride.password)
+  const pending = profileOverride
+    ? normalizeProfileInput(profileOverride.name, profileOverride.password)
     : captureProfileFromInputs();
+  const { name, password } = pending;
   try {
     const data = await apiFetch('/api/profile', {
       method: 'POST',
@@ -1939,11 +1945,11 @@ async function saveProfile(profileOverride = null) {
     const savedName = data.profile?.name || name;
     storeProfile(savedName, password);
     setProfileStatus(data.profile?.claimed
-      ? 'Profile saved. This name is password-protected.'
-      : 'Profile saved. This name is still unprotected.');
+      ? `Logged in as "${savedName}".`
+      : `Logged in as "${savedName}" (name is not password-protected).`);
     await refreshHighScores();
   } catch (err) {
-    setProfileStatus(err.message || 'Unable to save profile.');
+    setProfileStatus(err.message || 'Log in failed.');
   }
 }
 
@@ -1957,14 +1963,16 @@ async function submitHighScore() {
     setHighScoreStatus('Finish a run before submitting a score.');
     return;
   }
-  captureProfileFromInputs();
-  payload.name = currentProfileName();
-  payload.password = state.profile.password || '';
+  const pendingProfile = captureProfileFromInputs();
+  payload.name = pendingProfile.name;
+  payload.password = pendingProfile.password;
   try {
     const data = await apiFetch('/api/highscores', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+    storeProfile(pendingProfile.name, pendingProfile.password);
+    syncProfileInputs();
     state.highScores = Array.isArray(data.scores) ? data.scores : state.highScores;
     state.scoreStats = data?.stats && typeof data.stats === 'object'
       ? data.stats
