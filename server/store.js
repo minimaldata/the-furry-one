@@ -37,6 +37,9 @@ function verifyPassword(password, salt, expectedHex) {
 
 function compareEntries(a, b) {
   if ((b.score || 0) !== (a.score || 0)) return (b.score || 0) - (a.score || 0);
+  const aGame = Number.isFinite(Number(a.gameTimeMs)) ? Number(a.gameTimeMs) : 1e12;
+  const bGame = Number.isFinite(Number(b.gameTimeMs)) ? Number(b.gameTimeMs) : 1e12;
+  if (aGame !== bGame) return aGame - bGame;
   if ((a.furryMs || 0) !== (b.furryMs || 0)) return (a.furryMs || 0) - (b.furryMs || 0);
   return String(a.updatedAt || '').localeCompare(String(b.updatedAt || ''));
 }
@@ -130,7 +133,7 @@ export async function saveProfile({ name, password }) {
   return { name: cleanName, claimed: !!existing.passwordHash };
 }
 
-export async function submitScore({ name, password, score, furryMs, rule }) {
+export async function submitScore({ name, password, score, gameTimeMs, furryMs, rule }) {
   const cleanName = normalizeName(name);
   if (!cleanName) {
     const err = new Error('Name is required to submit a score.');
@@ -140,6 +143,7 @@ export async function submitScore({ name, password, score, furryMs, rule }) {
 
   const cleanPassword = String(password || '').slice(0, 128);
   const scoreNum = clampNumber(score, 0, 9999);
+  const gameTimeMsNum = clampNumber(gameTimeMs, 0, 60 * 60 * 1000);
   const furryMsNum = clampNumber(furryMs, 0, 10 * 60 * 1000);
   const key = nameKey(cleanName);
 
@@ -150,6 +154,7 @@ export async function submitScore({ name, password, score, furryMs, rule }) {
     nameKey: key,
     name: cleanName,
     score: scoreNum,
+    gameTimeMs: gameTimeMsNum,
     furryMs: furryMsNum,
     rule: typeof rule === 'string' ? rule.slice(0, 24) : 'hybrid',
     updatedAt: now,

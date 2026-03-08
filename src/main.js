@@ -378,6 +378,7 @@ function currentRunScorePayload() {
     name: currentProfileName(),
     password: state.profile.password || '',
     score: Math.round(me.score || 0),
+    gameTimeMs: Math.round(state.gameTimeMs || 0),
     furryMs: Math.round(me.furryMs || 0),
     rule: state.itTransferRule,
   };
@@ -386,7 +387,7 @@ function currentRunScorePayload() {
 function currentRunSig() {
   const payload = currentRunScorePayload();
   if (!payload) return null;
-  return `${payload.name}|${payload.score}|${payload.furryMs}|${payload.rule}`;
+  return `${payload.name}|${payload.score}|${payload.gameTimeMs}|${payload.furryMs}|${payload.rule}`;
 }
 
 function setProfileStatus(msg) {
@@ -401,14 +402,15 @@ function setHighScoreStatus(msg) {
 
 function renderHighScores() {
   if (!highScoreRowsEl) return;
-  const sig = state.highScores.map((row, i) => `${i}:${row.name}:${row.score}:${row.furryMs}`).join('|');
+  const sig = state.highScores.map((row, i) => `${i}:${row.name}:${row.score}:${row.gameTimeMs}:${row.furryMs}`).join('|');
   if (sig === highScoreSig) return;
   highScoreSig = sig;
   highScoreRowsEl.innerHTML = state.highScores.map((row, i) => {
+    const gameSec = ((row.gameTimeMs || 0) / 1000).toFixed(1);
     const furrySec = ((row.furryMs || 0) / 1000).toFixed(1);
     return `<div class="row">
       <div><b>${i + 1}. ${escapeHtml(row.name || 'Player')}</b></div>
-      <div>${Number(row.score || 0).toFixed(0)} pts · ${furrySec}s IT</div>
+      <div>${Number(row.score || 0).toFixed(0)} pts · ${gameSec}s total · ${furrySec}s IT</div>
     </div>`;
   }).join('') || '<div class="row"><div>No scores yet.</div><div>Play a run.</div></div>';
 }
@@ -558,6 +560,7 @@ const state = {
   highScores: [],
   highScoreStatus: '',
   lastSubmittedRunSig: null,
+  gameTimeMs: 0,
 
   players: [],
   obstacles: [],
@@ -614,6 +617,7 @@ function resetGameOffline() {
   state.nowMs = performance.now();
   state.lastT = performance.now();
   state.lastSubmittedRunSig = null;
+  state.gameTimeMs = 0;
 
   state.players = [makePlayer('me', currentProfileName(), true)];
   for (let i = 0; i < BOT_COUNT; i++) state.players.push(makePlayer('b' + i, 'Bot ' + (i + 1)));
@@ -1523,6 +1527,7 @@ function releaseThrow(thrower, charge01) {
 function updateOffline(dt) {
   const now = state.nowMs;
   if (state.over) return;
+  state.gameTimeMs += dt * 1000;
   refreshItBallTracking(now);
 
   const it = currentIt();
@@ -1722,8 +1727,9 @@ function draw() {
   } else if (state.mode === 'offline' && state.over && state.winnerId) {
     overlayEl?.classList.add('on');
     const wP = state.players.find(p => p.id === state.winnerId);
+    const runSec = ((state.gameTimeMs || 0) / 1000).toFixed(1);
     if (endTitleEl) endTitleEl.textContent = `${wP?.name || 'Someone'} wins!`;
-    if (endSubEl) endSubEl.textContent = `First to ${WIN_POINTS} points. Press Enter or Reset.`;
+    if (endSubEl) endSubEl.textContent = `First to ${WIN_POINTS} points in ${runSec}s. Press Enter or Reset.`;
     if (playOfflineBtn) playOfflineBtn.textContent = 'Play again';
     if (scoreActionsEl) scoreActionsEl.style.display = 'flex';
     if (submitHighScoreBtn) {

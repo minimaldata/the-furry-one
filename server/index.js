@@ -109,6 +109,7 @@ const server = http.createServer(async (req, res) => {
         name: body?.name,
         password: body?.password,
         score: body?.score,
+        gameTimeMs: body?.gameTimeMs,
         furryMs: body?.furryMs,
         rule: body?.rule,
       });

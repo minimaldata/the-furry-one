@@ -71,3 +71,9 @@ Otherwise, deploy the client separately (static site) and point it at the server
 - You can save a name without a password, but that name remains unprotected.
 - If you set a password, future score submissions for that name require the same password.
 - Passwords are stored server-side as hashes.
+
+### High Score Ranking
+Scores are ranked by:
+1) higher total points
+2) lower total game time
+3) lower time spent as IT
