@@ -1,0 +1,3 @@
+/api/*  https://the-furry-one.onrender.com/api/:splat  200
+/highscores  https://the-furry-one.onrender.com/api/highscores  200
+/profile  https://the-furry-one.onrender.com/api/profile  200
