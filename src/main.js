@@ -286,6 +286,7 @@ app.innerHTML = `
           </div>
           <div class="actions profileInlineActions">
             <button class="btn" id="saveProfile" type="button">Log in</button>
+            <div class="profileInlineStatus" id="profileInlineStatus"></div>
             <button class="btn" id="clearPassword" type="button">Clear password</button>
           </div>
         </div>
@@ -312,6 +313,7 @@ const runProfileNameEl = document.querySelector('#runProfileName');
 const profileNameEl = document.querySelector('#profileName');
 const profilePasswordEl = document.querySelector('#profilePassword');
 const saveProfileBtn = document.querySelector('#saveProfile');
+const profileInlineStatusEl = document.querySelector('#profileInlineStatus');
 const clearPasswordBtn = document.querySelector('#clearPassword');
 const highScoreTitleEl = document.querySelector('#highScoreTitle');
 const scoreDataSourceEl = document.querySelector('#scoreDataSource');
@@ -1288,8 +1290,14 @@ function currentRunSig() {
   return `${payload.name}|${payload.score}|${payload.gameTimeMs}|${payload.furryMs}|${payload.rule}`;
 }
 
-function setProfileStatus(msg) {
+function setProfileStatus(msg, type = 'info') {
   state.profileStatus = msg || '';
+  state.profileStatusType = type;
+  if (profileInlineStatusEl) {
+    profileInlineStatusEl.textContent = state.profileStatus;
+    profileInlineStatusEl.classList.toggle('isError', type === 'error' && !!state.profileStatus);
+    profileInlineStatusEl.classList.toggle('isSuccess', type === 'success' && !!state.profileStatus);
+  }
   if (msg) setHighScoreStatus(msg);
 }
 
@@ -1946,10 +1954,10 @@ async function saveProfile(profileOverride = null) {
     storeProfile(savedName, password);
     setProfileStatus(data.profile?.claimed
       ? `Logged in as "${savedName}".`
-      : `Logged in as "${savedName}" (name is not password-protected).`);
+      : `Logged in as "${savedName}" (name is not password-protected).`, 'success');
     await refreshHighScores();
   } catch (err) {
-    setProfileStatus(err.message || 'Log in failed.');
+    setProfileStatus(err.message || 'Log in failed.', 'error');
   }
 }
 
@@ -2108,6 +2116,7 @@ const state = {
   itTransferRule: IT_TRANSFER_RULES.HYBRID,
   profile: getStoredProfile(),
   profileStatus: '',
+  profileStatusType: 'info',
   highScores: [],
   highScoreStatus: '',
   scoreStats: emptyScoreStats(),
@@ -3582,7 +3591,7 @@ clearPasswordBtn?.addEventListener('click', () => {
   if (profilePasswordEl) profilePasswordEl.value = '';
   state.profile.password = '';
   localStorage.removeItem(STORAGE_KEYS.profilePassword);
-  setProfileStatus('Stored password cleared in this browser.');
+  setProfileStatus('Stored password cleared in this browser.', 'info');
 });
 
 profileNameEl?.addEventListener('keydown', (e) => {
