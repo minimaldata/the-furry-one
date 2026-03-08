@@ -101,3 +101,16 @@ canvas{width:100%;height:100%;display:block}
 .modal .row b{font-weight:800}
 .modal .actions{margin-top:12px;display:flex;gap:10px;justify-content:flex-end}
 .modal .actions .btn{pointer-events:auto}
+.sectionTitle{margin-top:14px;font-size:11px;letter-spacing:.08em;color:rgba(255,255,255,.62);text-transform:uppercase}
+.profileCard,.scoreCard{margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.10)}
+.profileGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.field{width:100%;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.05);color:var(--fg);border-radius:10px;padding:9px 10px;font-size:13px}
+.field::placeholder{color:rgba(255,255,255,.42)}
+.profileActions,.scoreActions{justify-content:flex-start}
+.highScoreRows{margin-top:8px}
+.btn:disabled{opacity:.45;cursor:default;transform:none}
+
+@media (max-width:700px){
+  .profileGrid{grid-template-columns:1fr}
+  .leaderboard{width:min(250px,calc(100vw - 24px))}
+}

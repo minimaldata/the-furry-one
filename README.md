@@ -3,7 +3,7 @@
 A small 2D dodgeball tag game prototype.
 
 - **Offline mode:** runs entirely in the browser (single-player + bots)
-- **Online mode:** single global room using an **authoritative Node WebSocket server** that simulates at **60Hz** and broadcasts state snapshots at **20Hz**
+- **High scores:** optional HTTP score service for saving best runs by name
 
 ## Controls
 - Move: WASD / Arrow Keys
@@ -20,7 +20,7 @@ npm install
 npm run dev
 ```
 
-### 2) Server (authoritative WS sim)
+### 2) Server (high score API)
 In another terminal:
 ```bash
 cd server
@@ -28,18 +28,18 @@ npm install
 npm run start
 ```
 
-The server listens on `http://localhost:8080` (and WS on `ws://localhost:8080`).
+The server listens on `http://localhost:8080`.
 
 ### Client → Server URL
 The browser client reads this env var:
-- `VITE_WS_URL` (example: `ws://localhost:8080`)
+- `VITE_API_URL` (example: `http://localhost:8080`)
 
 Create a `.env.local` in the repo root:
 ```bash
-VITE_WS_URL=ws://localhost:8080
+VITE_API_URL=http://localhost:8080
 ```
 
-If the client can’t connect quickly, it automatically falls back to **Offline**.
+If the score server is unavailable, the game still runs fully offline; only score saving/loading is affected.
 
 ## Build
 ```bash
@@ -47,7 +47,7 @@ npm run build
 ```
 
 ## Deploy (Render)
-This repo includes a Node server in `server/`.
+This repo includes a small Node HTTP server in `server/`.
 
 Suggested Render settings:
 - **Root Directory:** `server`
@@ -56,6 +56,7 @@ Suggested Render settings:
 - **Env Vars:**
   - `PORT` (Render sets this automatically)
   - `SERVE_STATIC=1` (optional: to serve `../dist`)
+  - `DATA_DIR=/var/data` (recommended if you attach a persistent disk)
 
 If you want the server to serve the built client:
 1) Build the client during deploy (one approach):
@@ -64,4 +65,9 @@ If you want the server to serve the built client:
 2) Set `SERVE_STATIC=1`
 
 Otherwise, deploy the client separately (static site) and point it at the server with:
-- `VITE_WS_URL=wss://YOUR-RENDER-SERVICE.onrender.com`
+- `VITE_API_URL=https://YOUR-RENDER-SERVICE.onrender.com`
+
+### Password-Protected Names
+- You can save a name without a password, but that name remains unprotected.
+- If you set a password, future score submissions for that name require the same password.
+- Passwords are stored server-side as hashes.

@@ -1,8 +1,7 @@
 import './style.css';
 
-// The Furry One — offline single-player + online multiplayer (single global room)
-// Offline (fallback): client sim
-// Online: authoritative server sim via WebSocket snapshots
+// The Furry One — offline single-player + high-score service
+// Gameplay runs locally in the browser; best scores can be saved via HTTP.
 
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -47,6 +46,7 @@ const BOT_COUNT = 14;
 const HIT_COOLDOWN_MS = 450;
 const TOUCH_TAG_COOLDOWN_MS = 650;
 const IT_PICKUP_RADIUS = PLAYER_RADIUS + BALL_RADIUS + 8;
+const THROW_RECLAIM_LOCK_MS = 120;
 
 const WIN_POINTS = 100;
 const PROX_MAX_DIST = 260;
@@ -109,6 +109,11 @@ const IT_TRANSFER_OPTIONS = [
   { value: IT_TRANSFER_RULES.TAG_ONLY, label: 'always tag' },
 ];
 
+const STORAGE_KEYS = {
+  profileName: 'tfo_profile_name',
+  profilePassword: 'tfo_profile_password',
+};
+
 const COLORS = {
   arena: '#0a0d14',
   grid: 'rgba(255,255,255,.04)',
@@ -142,12 +147,32 @@ app.innerHTML = `
 
   <div class="overlay" id="overlay">
     <div class="modal">
-      <h2 id="endTitle">Choose mode</h2>
-      <p id="endSub">Play offline (first to 100) or join the live online game (endless).</p>
+      <h2 id="endTitle">The Furry One</h2>
+      <p id="endSub">Play offline, chase a best score, and optionally protect your name with a password.</p>
       <div class="rows" id="endRows"></div>
+      <div class="profileCard">
+        <div class="sectionTitle">Profile</div>
+        <div class="profileGrid">
+          <input id="profileName" class="field" type="text" maxlength="24" placeholder="Name" />
+          <input id="profilePassword" class="field" type="password" maxlength="128" placeholder="Optional password" />
+        </div>
+        <div class="small" id="profileHint">Optional password claims your name for future high score submissions.</div>
+        <div class="actions profileActions">
+          <button class="btn" id="saveProfile" type="button">Save profile</button>
+          <button class="btn" id="clearPassword" type="button">Clear password</button>
+        </div>
+        <div class="small" id="profileStatus"></div>
+      </div>
+      <div class="scoreCard">
+        <div class="sectionTitle">High Scores</div>
+        <div class="rows highScoreRows" id="highScoreRows"></div>
+        <div class="small" id="highScoreStatus"></div>
+        <div class="actions scoreActions" id="scoreActions">
+          <button class="btn" id="submitHighScore" type="button">Submit score</button>
+        </div>
+      </div>
       <div class="actions">
-        <button class="btn" id="playOffline">Play offline</button>
-        <button class="btn" id="playOnline">Play online</button>
+        <button class="btn" id="playOffline">Start run</button>
       </div>
     </div>
   </div>
@@ -158,7 +183,22 @@ app.innerHTML = `
 const canvas = document.querySelector('#c');
 const ctx = canvas.getContext('2d');
 const leaderboardEl = document.querySelector('#leaderboard');
+const overlayEl = document.querySelector('#overlay');
+const endTitleEl = document.querySelector('#endTitle');
+const endSubEl = document.querySelector('#endSub');
+const endRowsEl = document.querySelector('#endRows');
+const playOfflineBtn = document.querySelector('#playOffline');
+const profileNameEl = document.querySelector('#profileName');
+const profilePasswordEl = document.querySelector('#profilePassword');
+const profileStatusEl = document.querySelector('#profileStatus');
+const highScoreRowsEl = document.querySelector('#highScoreRows');
+const highScoreStatusEl = document.querySelector('#highScoreStatus');
+const submitHighScoreBtn = document.querySelector('#submitHighScore');
+const saveProfileBtn = document.querySelector('#saveProfile');
+const clearPasswordBtn = document.querySelector('#clearPassword');
+const scoreActionsEl = document.querySelector('#scoreActions');
 let leaderboardSig = '';
+let highScoreSig = null;
 let leaderboardRowsEl = null;
 let leaderboardDevSelectEl = null;
 let leaderboardRuleSelectEl = null;
@@ -280,6 +320,155 @@ function updateLeaderboard(players, myId) {
   leaderboardEl.classList.toggle('occluded', occluded);
 }
 
+function getApiBaseUrl() {
+  const env = import.meta.env?.VITE_API_URL;
+  if (env && typeof env === 'string') return env.replace(/\/$/, '');
+  if (window.location.port === '5173') return 'http://localhost:8080';
+  return window.location.origin;
+}
+
+async function apiFetch(pathname, options = {}) {
+  const url = `${getApiBaseUrl()}${pathname}`;
+  const headers = { ...(options.headers || {}) };
+  if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+  const res = await fetch(url, { ...options, headers });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data?.ok === false) {
+    throw new Error(data?.error || `Request failed (${res.status})`);
+  }
+  return data;
+}
+
+function getStoredProfile() {
+  const name = (localStorage.getItem(STORAGE_KEYS.profileName) || 'Player').trim().slice(0, 24) || 'Player';
+  const password = localStorage.getItem(STORAGE_KEYS.profilePassword) || '';
+  return { name, password };
+}
+
+function syncProfileInputs() {
+  if (profileNameEl) profileNameEl.value = state.profile.name || '';
+  if (profilePasswordEl) profilePasswordEl.value = state.profile.password || '';
+}
+
+function captureProfileFromInputs() {
+  const name = String(profileNameEl?.value || state.profile.name || 'Player').trim().replace(/\s+/g, ' ').slice(0, 24) || 'Player';
+  const password = String(profilePasswordEl?.value || '').slice(0, 128);
+  state.profile.name = name;
+  state.profile.password = password;
+  localStorage.setItem(STORAGE_KEYS.profileName, name);
+  if (password) localStorage.setItem(STORAGE_KEYS.profilePassword, password);
+  else localStorage.removeItem(STORAGE_KEYS.profilePassword);
+  const me = state.players.find((p) => p.human);
+  if (me) me.name = name;
+  return { name, password };
+}
+
+function currentProfileName() {
+  return (state.profile.name || 'Player').trim().slice(0, 24) || 'Player';
+}
+
+function currentHumanPlayer() {
+  return state.players.find((p) => p.human) || null;
+}
+
+function currentRunScorePayload() {
+  const me = currentHumanPlayer();
+  if (!me || !state.over) return null;
+  return {
+    name: currentProfileName(),
+    password: state.profile.password || '',
+    score: Math.round(me.score || 0),
+    furryMs: Math.round(me.furryMs || 0),
+    rule: state.itTransferRule,
+  };
+}
+
+function currentRunSig() {
+  const payload = currentRunScorePayload();
+  if (!payload) return null;
+  return `${payload.name}|${payload.score}|${payload.furryMs}|${payload.rule}`;
+}
+
+function setProfileStatus(msg) {
+  state.profileStatus = msg || '';
+  if (profileStatusEl) profileStatusEl.textContent = state.profileStatus;
+}
+
+function setHighScoreStatus(msg) {
+  state.highScoreStatus = msg || '';
+  if (highScoreStatusEl) highScoreStatusEl.textContent = state.highScoreStatus;
+}
+
+function renderHighScores() {
+  if (!highScoreRowsEl) return;
+  const sig = state.highScores.map((row, i) => `${i}:${row.name}:${row.score}:${row.furryMs}`).join('|');
+  if (sig === highScoreSig) return;
+  highScoreSig = sig;
+  highScoreRowsEl.innerHTML = state.highScores.map((row, i) => {
+    const furrySec = ((row.furryMs || 0) / 1000).toFixed(1);
+    return `<div class="row">
+      <div><b>${i + 1}. ${escapeHtml(row.name || 'Player')}</b></div>
+      <div>${Number(row.score || 0).toFixed(0)} pts · ${furrySec}s IT</div>
+    </div>`;
+  }).join('') || '<div class="row"><div>No scores yet.</div><div>Play a run.</div></div>';
+}
+
+async function refreshHighScores() {
+  try {
+    const data = await apiFetch('/api/highscores?limit=10');
+    state.highScores = Array.isArray(data.scores) ? data.scores : [];
+    renderHighScores();
+    if (!state.highScoreStatus) setHighScoreStatus('Best local-browser runs saved on the server.');
+  } catch (err) {
+    state.highScores = [];
+    renderHighScores();
+    setHighScoreStatus(err.message || 'Unable to load high scores.');
+  }
+}
+
+async function saveProfile() {
+  const { name, password } = captureProfileFromInputs();
+  try {
+    const data = await apiFetch('/api/profile', {
+      method: 'POST',
+      body: JSON.stringify({ name, password }),
+    });
+    state.profile.name = data.profile?.name || name;
+    setProfileStatus(data.profile?.claimed
+      ? 'Profile saved. This name is password-protected.'
+      : 'Profile saved. This name is still unprotected.');
+    syncProfileInputs();
+    await refreshHighScores();
+  } catch (err) {
+    setProfileStatus(err.message || 'Unable to save profile.');
+  }
+}
+
+async function submitHighScore() {
+  const payload = currentRunScorePayload();
+  if (!payload) {
+    setHighScoreStatus('Finish a run before submitting a score.');
+    return;
+  }
+  captureProfileFromInputs();
+  payload.name = currentProfileName();
+  payload.password = state.profile.password || '';
+  try {
+    const data = await apiFetch('/api/highscores', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    state.highScores = Array.isArray(data.scores) ? data.scores : state.highScores;
+    renderHighScores();
+    state.lastSubmittedRunSig = currentRunSig();
+    setHighScoreStatus(data.improved
+      ? `Score saved. Current rank: #${data.rank || '?'}`
+      : `Run submitted. Best saved rank remains #${data.rank || '?'}.`);
+  } catch (err) {
+    setHighScoreStatus(err.message || 'Unable to submit score.');
+  }
+}
+
 // Input
 const keys = new Set();
 window.addEventListener('keydown', (e) => {
@@ -309,7 +498,7 @@ window.addEventListener('blur', clearKeys);
 document.addEventListener('visibilitychange', () => { if (document.hidden) clearKeys(); });
 window.addEventListener('focus', clearKeys);
 
-// Offline simulation state (also reused as container for online snapshots)
+// Offline simulation state
 function makePlayer(id, name, isHuman = false) {
   const pad = 60;
   return {
@@ -358,12 +547,17 @@ const state = {
   nowMs: performance.now(),
   lastT: performance.now(),
 
-  mode: null, // 'offline' | 'online'
+  mode: null, // null | 'offline'
   online: false,
   wsReady: false,
-  playerId: null,
+  playerId: 'me',
   devColorMode: DEV_COLOR_MODES.NONE,
   itTransferRule: IT_TRANSFER_RULES.HYBRID,
+  profile: getStoredProfile(),
+  profileStatus: '',
+  highScores: [],
+  highScoreStatus: '',
+  lastSubmittedRunSig: null,
 
   players: [],
   obstacles: [],
@@ -409,6 +603,8 @@ function setIt(playerId) {
   state.ball.heldBy = playerId;
   state.ball.vx = 0;
   state.ball.vy = 0;
+  state.ball.pickupIgnoreId = null;
+  state.ball.pickupLockUntil = -1e9;
   state.itHasBall = true;
   state.itLostBallAtMs = now;
   state.itBalllessMs = 0;
@@ -417,8 +613,9 @@ function setIt(playerId) {
 function resetGameOffline() {
   state.nowMs = performance.now();
   state.lastT = performance.now();
+  state.lastSubmittedRunSig = null;
 
-  state.players = [makePlayer('me', 'You', true)];
+  state.players = [makePlayer('me', currentProfileName(), true)];
   for (let i = 0; i < BOT_COUNT; i++) state.players.push(makePlayer('b' + i, 'Bot ' + (i + 1)));
 
   state.obstacles = [
@@ -446,6 +643,8 @@ function resetGameOffline() {
     lastThrower: null,
     armed: false,
     thrownAt: -1e9,
+    pickupIgnoreId: null,
+    pickupLockUntil: -1e9,
   };
 
   state.itHasBall = true;
@@ -953,11 +1152,16 @@ function moveBot(p, dt) {
   if (p.it) {
     if (itBallLoose) {
       nextState = BOT_STATES.IT_CHASE_BALL;
-      const chaseLeadT = clamp(vecLen(b.vx, b.vy) / 980, 0.06, 0.24);
+      const ballDist = vecLen(b.x - p.x, b.y - p.y);
+      const chaseLeadT = clamp(vecLen(b.vx, b.vy) / 1250, 0.02, 0.14);
       tx = b.x + b.vx * chaseLeadT;
       ty = b.y + b.vy * chaseLeadT;
-      speed = lerp(1000, 1160, winPush);
-      snap = lerp(0.0046, 0.0018, winPush);
+      if (ballDist < 170) {
+        tx = b.x;
+        ty = b.y;
+      }
+      speed = lerp(1120, 1320, winPush);
+      snap = lerp(0.0032, 0.0011, winPush);
     } else if (b && b.heldBy === p.id && allowTagTransfer && preferTag) {
       nextState = BOT_STATES.IT_TAG_RUSH;
       tx = nearest.x;
@@ -1308,6 +1512,8 @@ function releaseThrow(thrower, charge01) {
   b.lastThrower = thrower.id;
   b.armed = true;
   b.thrownAt = now;
+  b.pickupIgnoreId = thrower.id;
+  b.pickupLockUntil = now + THROW_RECLAIM_LOCK_MS;
   b.x = thrower.x + nx * (PLAYER_RADIUS + BALL_RADIUS + 2);
   b.y = thrower.y + ny * (PLAYER_RADIUS + BALL_RADIUS + 2);
   b.vx = nx * speed;
@@ -1455,12 +1661,15 @@ function updateOffline(dt) {
     // IT should be able to reclaim the ball immediately when close.
     if (it && !b.heldBy) {
       const dItBall = vecLen(it.x - b.x, it.y - b.y);
-      if (dItBall <= IT_PICKUP_RADIUS) {
+      const pickupLocked = b.pickupIgnoreId === it.id && now < (b.pickupLockUntil || -1e9);
+      if (!pickupLocked && dItBall <= IT_PICKUP_RADIUS) {
         b.heldBy = it.id;
         b.lastThrower = null;
         b.armed = false;
         b.vx = 0;
         b.vy = 0;
+        b.pickupIgnoreId = null;
+        b.pickupLockUntil = -1e9;
       }
     }
 
@@ -1495,7 +1704,7 @@ function draw() {
   const cw = canvas.clientWidth;
   const ch = canvas.clientHeight;
 
-  // choose state for rendering (interpolated when online)
+  // choose state for rendering
   const R = getRenderSnapshot();
   const players = R.players || [];
   const obstacles = R.obstacles || [];
@@ -1503,24 +1712,28 @@ function draw() {
   const it = players.find(p => p.it);
 
   // overlay: mode picker (pre-game) OR offline end screen
-  const overlay = document.querySelector('#overlay');
-  const endTitle = document.querySelector('#endTitle');
-  const endSub = document.querySelector('#endSub');
-  const endRows = document.querySelector('#endRows');
-
   if (!state.mode) {
-    overlay?.classList.add('on');
-    if (endTitle) endTitle.textContent = 'Choose mode';
-    if (endSub) endSub.textContent = 'Play offline (first to 100) or join the live online game (endless).';
-    if (endRows) endRows.innerHTML = '';
+    overlayEl?.classList.add('on');
+    if (endTitleEl) endTitleEl.textContent = 'The Furry One';
+    if (endSubEl) endSubEl.textContent = 'Play offline, chase a best score, and optionally protect your name with a password.';
+    if (endRowsEl) endRowsEl.innerHTML = '';
+    if (playOfflineBtn) playOfflineBtn.textContent = 'Start run';
+    if (scoreActionsEl) scoreActionsEl.style.display = 'none';
   } else if (state.mode === 'offline' && state.over && state.winnerId) {
-    overlay?.classList.add('on');
+    overlayEl?.classList.add('on');
     const wP = state.players.find(p => p.id === state.winnerId);
-    if (endTitle) endTitle.textContent = `${wP?.name || 'Someone'} wins!`;
-    if (endSub) endSub.textContent = `First to ${WIN_POINTS} points. Press Enter or Reset.`;
-    if (endRows) {
+    if (endTitleEl) endTitleEl.textContent = `${wP?.name || 'Someone'} wins!`;
+    if (endSubEl) endSubEl.textContent = `First to ${WIN_POINTS} points. Press Enter or Reset.`;
+    if (playOfflineBtn) playOfflineBtn.textContent = 'Play again';
+    if (scoreActionsEl) scoreActionsEl.style.display = 'flex';
+    if (submitHighScoreBtn) {
+      const alreadySubmitted = currentRunSig() && state.lastSubmittedRunSig === currentRunSig();
+      submitHighScoreBtn.disabled = !!alreadySubmitted;
+      submitHighScoreBtn.textContent = alreadySubmitted ? 'Score submitted' : 'Submit score';
+    }
+    if (endRowsEl) {
       const sorted = [...state.players].sort((a,b) => (b.score||0) - (a.score||0));
-      endRows.innerHTML = sorted.map(p => {
+      endRowsEl.innerHTML = sorted.map(p => {
         const pts = (p.score || 0).toFixed(0);
         const furry = (p.furryMs/1000).toFixed(1);
         const you = p.id === (state.playerId || 'me') ? ' (you)' : (p.human ? ' (player)' : '');
@@ -1528,7 +1741,7 @@ function draw() {
       }).join('');
     }
   } else {
-    overlay?.classList.remove('on');
+    overlayEl?.classList.remove('on');
   }
 
   // background
@@ -1651,7 +1864,7 @@ function draw() {
     ctx.beginPath();
     ctx.arc(p.x, p.y, PLAYER_RADIUS, 0, TAU);
     const isMe = p.id === (state.playerId || 'me');
-    const botColor = (state.mode === 'offline' && !state.online) ? getOfflineBotColor(p, it, state.nowMs) : COLORS.bot;
+    const botColor = state.mode === 'offline' ? getOfflineBotColor(p, it, state.nowMs) : COLORS.bot;
     ctx.fillStyle = isMe ? COLORS.me : (p.human ? 'rgba(255,255,255,.86)' : botColor);
     ctx.globalAlpha = p.disconnected ? 0.35 : 1;
     ctx.fill();
@@ -1706,7 +1919,7 @@ function draw() {
 
   // HUD
   const statusEl = document.querySelector('#status');
-  const mode = state.online ? (state.wsReady ? 'Online' : 'Connecting…') : 'Offline';
+  const mode = 'Offline';
   if (it) statusEl.textContent = `${mode} · ${it.name} is IT`;
   else statusEl.textContent = `${mode} · waiting for IT…`;
 
@@ -1737,255 +1950,8 @@ function draw() {
   }
 }
 
-// Online networking
-let ws = null;
-let inputSeq = 0;
-let inputTimer = null;
-
-// Inactivity kick
-const INACTIVITY_KICK_MS = 5000;
-state.lastMoveAtMs = performance.now();
-
-// Net smoothing
-const RENDER_DELAY_MS = 50; // interpolate slightly "in the past" for smoothness
-const MAX_SNAPSHOT_AGE_MS = 2000;
-state.snapshots = []; // { recvMs, nowMs, players, obstacles, ball, over, winnerId }
-
-function getWsUrl() {
-  const env = import.meta.env?.VITE_WS_URL;
-  if (env && typeof env === 'string') return env;
-  // default dev
-  return 'ws://localhost:8080';
-}
-
-function getPlayerName() {
-  const k = 'tfo_name';
-  let name = localStorage.getItem(k);
-  if (!name) {
-    name = (prompt('Name for online play?', 'Player') || 'Player').trim();
-    if (!name) name = 'Player';
-    localStorage.setItem(k, name);
-  }
-  return name.slice(0, 24);
-}
-
-function connectOnline() {
-  const url = getWsUrl();
-  state.online = true;
-  state.wsReady = false;
-
-  const storedId = localStorage.getItem('tfo_playerId');
-  const name = getPlayerName();
-
-  ws = new WebSocket(url);
-
-  ws.addEventListener('open', () => {
-    state.lastMoveAtMs = performance.now();
-    ws.send(JSON.stringify({ type: 'join', playerId: storedId, name }));
-  });
-
-  ws.addEventListener('message', (ev) => {
-    let msg;
-    try { msg = JSON.parse(ev.data); } catch { return; }
-
-    if (msg.type === 'welcome') {
-      state.wsReady = true;
-      state.playerId = msg.playerId;
-      localStorage.setItem('tfo_playerId', msg.playerId);
-      state.pendingServerState = msg.state;
-      startInputLoop();
-      return;
-    }
-
-    if (msg.type === 'state' && msg.state) {
-      // keep only the latest snapshot; apply once per frame in loop()
-      state.pendingServerState = msg.state;
-      return;
-    }
-  });
-
-  const goOffline = () => {
-    state.online = false;
-    state.wsReady = false;
-    stopInputLoop();
-    ws = null;
-  };
-
-  ws.addEventListener('close', goOffline);
-  ws.addEventListener('error', goOffline);
-}
-
-function applyServerState(s) {
-  const recvMs = performance.now();
-  const snap = {
-    recvMs,
-    nowMs: s.nowMs ?? 0,
-    players: s.players ?? [],
-    obstacles: s.obstacles ?? [],
-    ball: s.ball ?? null,
-    over: !!s.over,
-    winnerId: s.winnerId ?? null,
-  };
-
-  state.snapshots.push(snap);
-
-  // keep only recent snapshots
-  const cutoff = recvMs - MAX_SNAPSHOT_AGE_MS;
-  state.snapshots = state.snapshots.filter(x => x.recvMs >= cutoff);
-
-  // keep a non-interpolated "latest" copy for non-positional fields
-  state.nowMs = snap.nowMs;
-  state.obstacles = snap.obstacles;
-  state.over = snap.over;
-  state.winnerId = snap.winnerId;
-}
-
-function lerpObj(a, b, t) {
-  if (!a) return b;
-  if (!b) return a;
-  const out = { ...b };
-  for (const k of ['x','y','vx','vy','aimX','aimY','aimCharge']) {
-    if (typeof a[k] === 'number' && typeof b[k] === 'number') out[k] = lerp(a[k], b[k], t);
-  }
-  return out;
-}
-
 function getRenderSnapshot() {
-  if (!state.online || !state.snapshots?.length) {
-    return { players: state.players, obstacles: state.obstacles, ball: state.ball };
-  }
-
-  const snaps = state.snapshots;
-  const latest = snaps[snaps.length - 1];
-  const targetNowMs = (latest.nowMs || 0) - RENDER_DELAY_MS;
-
-  // If we're very close to latest, allow a tiny extrapolation window to reduce "behind" feel.
-  const EXTRAP_MAX_MS = 90;
-
-  // Find two snapshots around targetNowMs
-  let a = null;
-  let b = latest;
-
-  // If target is newer than latest snapshot, extrapolate from latest for a short window.
-  if (targetNowMs > (latest.nowMs || 0)) {
-    const ahead = clamp(targetNowMs - (latest.nowMs || 0), 0, EXTRAP_MAX_MS);
-
-    const players = (latest.players || []).map(p => {
-      const out = { ...p };
-      if (typeof out.x === 'number' && typeof out.vx === 'number') out.x = out.x + out.vx * (ahead / 1000);
-      if (typeof out.y === 'number' && typeof out.vy === 'number') out.y = out.y + out.vy * (ahead / 1000);
-      return out;
-    });
-
-    let ball = latest.ball ? { ...latest.ball } : null;
-    if (ball && !ball.heldBy) {
-      if (typeof ball.x === 'number' && typeof ball.vx === 'number') ball.x = ball.x + ball.vx * (ahead / 1000);
-      if (typeof ball.y === 'number' && typeof ball.vy === 'number') ball.y = ball.y + ball.vy * (ahead / 1000);
-    }
-
-    return { players, obstacles: latest.obstacles || [], ball };
-  }
-  for (let i = snaps.length - 1; i >= 0; i--) {
-    if ((snaps[i].nowMs || 0) <= targetNowMs) {
-      a = snaps[i];
-      b = snaps[Math.min(i + 1, snaps.length - 1)];
-      break;
-    }
-  }
-  if (!a) {
-    // If we're too early, just use the oldest
-    a = snaps[0];
-    b = snaps[0];
-  }
-
-  const denom = ((b.nowMs || 0) - (a.nowMs || 0)) || 1;
-  const t = clamp((targetNowMs - (a.nowMs || 0)) / denom, 0, 1);
-
-  // players by id
-  const mapA = new Map((a.players || []).map(p => [p.id, p]));
-  const mapB = new Map((b.players || []).map(p => [p.id, p]));
-  const ids = new Set([...mapA.keys(), ...mapB.keys()]);
-  const players = [];
-  for (const id of ids) {
-    const pa = mapA.get(id);
-    const pb = mapB.get(id);
-    const p = lerpObj(pa, pb, t);
-    // keep discrete fields from newer snapshot
-    const src = pb || pa || {};
-    p.id = src.id;
-    p.name = src.name;
-    p.human = src.human;
-    p.it = src.it;
-    p.score = src.score;
-    p.furryMs = src.furryMs;
-    p.aiming = src.aiming;
-    p.disconnected = src.disconnected;
-    players.push(p);
-  }
-
-  // ball
-  const ball = lerpObj(a.ball, b.ball, t);
-  if (ball) {
-    const src = b.ball || a.ball || {};
-    ball.heldBy = src.heldBy;
-    ball.armed = src.armed;
-    ball.lastThrower = src.lastThrower;
-  }
-
-  return { players, obstacles: latest.obstacles || b.obstacles || a.obstacles || [], ball };
-}
-
-function buildInput() {
-  const up = keys.has('ArrowUp') || keys.has('w') || keys.has('W');
-  const dn = keys.has('ArrowDown') || keys.has('s') || keys.has('S');
-  const lf = keys.has('ArrowLeft') || keys.has('a') || keys.has('A');
-  const rt = keys.has('ArrowRight') || keys.has('d') || keys.has('D');
-  const spaceDown = keys.has(' ');
-
-  if (up || dn || lf || rt) state.lastMoveAtMs = performance.now();
-
-  return {
-    type: 'input',
-    seq: ++inputSeq,
-    clientTime: performance.now(),
-    up, dn, lf, rt,
-    mouseX: mouse.x,
-    mouseY: mouse.y,
-    mouseDown: mouse.down,
-    spaceDown,
-  };
-}
-
-function startInputLoop() {
-  stopInputLoop();
-  inputTimer = setInterval(() => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    if (!state.wsReady) return;
-    ws.send(JSON.stringify(buildInput()));
-  }, 20); // higher input rate helps perceived latency
-}
-
-function stopInputLoop() {
-  if (inputTimer) clearInterval(inputTimer);
-  inputTimer = null;
-}
-
-// Main loop
-function kickToHome(reason = 'inactive') {
-  state.mode = null;
-  state.online = false;
-  state.wsReady = false;
-  stopInputLoop();
-  if (ws) {
-    try { ws.close(); } catch {}
-    ws = null;
-  }
-  // reset offline so the background isn't stale
-  resetGameOffline();
-  state.lastMoveAtMs = performance.now();
-
-  const statusEl = document.querySelector('#status');
-  if (statusEl && reason === 'inactive') statusEl.textContent = 'Offline · kicked for inactivity';
+  return { players: state.players, obstacles: state.obstacles, ball: state.ball };
 }
 
 function loop() {
@@ -1993,20 +1959,7 @@ function loop() {
   const dt = clamp((now - state.lastT) / 1000, 0, 0.05);
   state.lastT = now;
 
-  // Apply at most one server state per frame (prevents backlog/freezes).
-  if (state.mode === 'online' && state.wsReady && state.pendingServerState) {
-    applyServerState(state.pendingServerState);
-    state.pendingServerState = null;
-  }
-
-  // inactivity kick (online only)
-  if (state.mode === 'online' && state.wsReady) {
-    if ((now - (state.lastMoveAtMs || now)) > INACTIVITY_KICK_MS) {
-      kickToHome('inactive');
-    }
-  }
-
-  if (!state.online) {
+  if (state.mode === 'offline') {
     state.nowMs = now;
     updateOffline(dt);
   }
@@ -2015,55 +1968,47 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
-// Buttons
 const resetBtn = document.querySelector('#reset');
 resetBtn.addEventListener('click', () => {
-  if (state.online && ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'reset' }));
-  } else {
-    resetGameOffline();
-  }
-});
-
-// Mode selection buttons
-const playOfflineBtn = document.querySelector('#playOffline');
-const playOnlineBtn = document.querySelector('#playOnline');
-
-playOfflineBtn?.addEventListener('click', () => {
   state.mode = 'offline';
-  state.online = false;
-  state.wsReady = false;
-  stopInputLoop();
-  if (ws) {
-    try { ws.close(); } catch {}
-    ws = null;
-  }
   resetGameOffline();
 });
 
-playOnlineBtn?.addEventListener('click', () => {
-  state.mode = 'online';
-  state.lastMoveAtMs = performance.now();
-  try { connectOnline(); } catch {
-    state.mode = null;
-    state.online = false;
-  }
+playOfflineBtn?.addEventListener('click', () => {
+  state.mode = 'offline';
+  resetGameOffline();
+});
+
+saveProfileBtn?.addEventListener('click', () => {
+  saveProfile();
+});
+
+clearPasswordBtn?.addEventListener('click', () => {
+  state.profile.password = '';
+  localStorage.removeItem(STORAGE_KEYS.profilePassword);
+  if (profilePasswordEl) profilePasswordEl.value = '';
+  setProfileStatus('Stored password cleared in this browser.');
+});
+
+submitHighScoreBtn?.addEventListener('click', () => {
+  submitHighScore();
 });
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && state.over) {
-    if (state.online && ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'reset' }));
-    else resetGameOffline();
+    state.mode = 'offline';
+    resetGameOffline();
   }
 });
 
-// Boot
 resize();
+syncProfileInputs();
+setProfileStatus('');
+setHighScoreStatus('Loading high scores…');
+renderHighScores();
 resetGameOffline();
-
-// Start with mode picker.
 state.mode = null;
 state.online = false;
 state.wsReady = false;
-
+refreshHighScores();
 loop();
